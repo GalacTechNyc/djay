@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>djay</title>
+  <meta name="description" content="Two-deck DJ mixer with swipe scratching for Meta Ray-Ban Display">
+  <meta name="mrbd-web-app-capable" content="yes">
+  <meta name="viewport" content="width=600, height=600, initial-scale=1.0, user-scalable=no">
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Continuous Neural Band drag → pointer events. Must be in the initial
+    // stylesheet, so it's opt-in via ?drag=1 (swipes still work without it).
+    if (/[?&]drag=1/.test(location.search)) {
+      document.write('<style>body{touch-action:none}</style>');
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <div class="deck-head a">
+        <div class="title" id="titleA"></div>
+        <div class="meta" id="metaA"></div>
+        <canvas id="waveA" width="280" height="40"></canvas>
+      </div>
+      <div class="deck-head b">
+        <div class="title" id="titleB"></div>
+        <div class="meta" id="metaB"></div>
+        <canvas id="waveB" width="280" height="40"></canvas>
+      </div>
+    </header>
+
+    <section class="platters">
+      <div class="platter a focusable" id="platA" tabindex="0" data-deck="0" data-kind="platter"
+           data-hint="Tap to grab the record, then swipe to scratch">
+        <div class="disc"><div class="label">A</div><div class="marker"></div></div>
+      </div>
+      <div class="center">
+        <button class="focusable" data-action="library" data-hint="Browse Apple Music, Audius and demo tracks">♫<span>Library</span></button>
+        <button class="focusable" data-action="automix" data-hint="Beat-matched 16-beat blend to the other deck">⇄<span>Automix</span></button>
+      </div>
+      <div class="platter b focusable" id="platB" tabindex="0" data-deck="1" data-kind="platter"
+           data-hint="Tap to grab the record, then swipe to scratch">
+        <div class="disc"><div class="label">B</div><div class="marker"></div></div>
+      </div>
+    </section>
+
+    <section class="buttons">
+      <div class="grp a">
+        <button class="focusable" data-action="play" data-deck="0" data-hint="Play / pause deck A">▶</button>
+        <button class="focusable" data-action="cue" data-deck="0" data-hint="Playing: jump back to cue · Paused: set cue">CUE</button>
+        <button class="focusable" data-action="sync" data-deck="0" data-hint="Match A's tempo and beats to B">SYNC</button>
+      </div>
+      <div class="grp b">
+        <button class="focusable" data-action="sync" data-deck="1" data-hint="Match B's tempo and beats to A">SYNC</button>
+        <button class="focusable" data-action="cue" data-deck="1" data-hint="Playing: jump back to cue · Paused: set cue">CUE</button>
+        <button class="focusable" data-action="play" data-deck="1" data-hint="Play / pause deck B">▶</button>
+      </div>
+    </section>
+
+    <section class="sliders">
+      <div class="grp a">
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="tempo" data-deck="0" data-hint="Tap, then swipe to change A's tempo">
+          <span class="name">TEMPO</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="filter" data-deck="0" data-hint="Tap, then swipe: ◀ low-pass · high-pass ▶">
+          <span class="name">FILTER</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+      </div>
+      <div class="grp b">
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="filter" data-deck="1" data-hint="Tap, then swipe: ◀ low-pass · high-pass ▶">
+          <span class="name">FILTER</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="tempo" data-deck="1" data-hint="Tap, then swipe to change B's tempo">
+          <span class="name">TEMPO</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="xfader">
+      <div class="slider xf focusable" tabindex="0" data-kind="slider" data-param="xf" data-hint="Tap, then swipe to crossfade A ◀ ▶ B">
+        <span class="name a">A</span><span class="val"></span><span class="name b">B</span><div class="track"><div class="thumb"></div></div>
+      </div>
+    </section>
+
+    <footer id="hint"></footer>
+  </div>
+
+  <div id="library" hidden>
+    <h1 id="libTitle">Library</h1>
+    <ul id="libList" tabindex="-1"></ul>
+    <input id="search" type="search" placeholder="Search songs or artists…" autocomplete="off">
+    <div id="libHint"></div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

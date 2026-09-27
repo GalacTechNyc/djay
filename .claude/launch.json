@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "djay", "runtimeExecutable": "python3", "runtimeArgs": ["-m", "http.server", "8600"], "port": 8600 }
+  ]
+}
