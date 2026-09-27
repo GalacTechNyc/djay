@@ -8,6 +8,8 @@ A two-deck DJ mixer that runs as a web app on Meta Ray-Ban Display glasses. You 
 - Crossfader, tempo (±16%), and a low-pass/high-pass filter per deck
 - Crossfader-cut "transformer" scratches
 - Slip mode (scratch without losing the beat) and Quantize (play, cue and scratch snap to the beat)
+- 3-band EQ with kills, bass-swap Automix, loops and loop rolls, beat jump, tap tempo
+- Head-tilt filter (experimental)
 - Music from **Apple Music** (30-second previews), **Audius** (full tracks), 4 built-in demo loops, or your own files
 
 No build step. Plain HTML/CSS/JS, about 60 KB in total.
@@ -28,6 +30,20 @@ No build step. Plain HTML/CSS/JS, about 60 KB in total.
 | Library | Tap search row | Opens the glasses keyboard |
 
 To practice a baby scratch: grab the platter, then swipe right, left, right, left in time with the beat on the "ahh" vocal in the demo tracks.
+
+### Pages
+
+The **☰ Page** button (middle column) flips the bottom controls between three pages:
+
+- **Deck**: ▶ · CUE · ↩ hot cue · ⏮ start · SYNC · SLIP, plus TEMPO and FILTER.
+- **Loop**: ◀◀ / ▶▶ beat jump · LOOP (¼ to 32 beats; ½ / ×2 change the size) · BPM ÷2 / ×2 (fix a tempo detected at half or double speed) · TAP (tap 4+ times on the beat to set the tempo and beat grid). With Quantize on, loops start on the beat. With Slip on, a loop is a "loop roll": when it ends, the track rejoins where it would have been.
+- **EQ**: LOW / MID / HIGH (−24 to +6 dB; all the way down = kill) and KILL LO / MID / HI buttons.
+
+Automix does a **bass swap**: the incoming track's bass stays out until halfway through the blend, then the basslines swap, so two kick drums never play at once.
+
+### Head-tilt filter (experimental)
+
+Library → **Head-tilt filter** uses the glasses' motion sensor: tilt your head right for a high-pass sweep and left for a low-pass sweep on the deck you're hearing. Small movements are ignored; your head position when you turn it on counts as level.
 
 ### Cueing
 

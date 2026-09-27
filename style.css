@@ -82,8 +82,8 @@ canvas { display: block; width: 280px; height: 40px; }
 @keyframes flickR { 50% { translate: 4px 0; } }
 @keyframes flickL { 50% { translate: -4px 0; } }
 
-.center { position: absolute; left: 228px; width: 144px; top: 8px; display: flex; flex-direction: column; gap: 10px; }
-.center button { height: 64px; font-size: 24px; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; }
+.center { position: absolute; left: 228px; width: 144px; top: 6px; display: flex; flex-direction: column; gap: 7px; }
+.center button { height: 48px; font-size: 20px; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; }
 .center button span { font-size: 16px; font-weight: 600; }
 .center button.on { border-color: var(--hot); color: var(--hot); }
 
@@ -157,3 +157,16 @@ canvas { display: block; width: 280px; height: 40px; }
 .row.info small.good { color: #4ade80; }
 .row.info small.bad { color: #ff6b6b; }
 
+
+/* ---------- pages ---------- */
+.page[hidden] { display: none; }
+.buttons.row2 { top: 404px; height: 68px; }
+.buttons.row2 button { font-size: 17px; }
+.sliders.eq .slider { padding: 8px 7px; }
+.sliders.eq .slider .name, .sliders.eq .slider .val { font-size: 15px; }
+.sliders.eq .grp { gap: 4px; }
+.buttons button[data-action="loop"] { font-size: 16px; }
+.buttons button[data-action="jump"], .buttons button[data-action="loopsize"] { font-size: 19px; }
+.buttons button[data-action="kill"] { font-size: 15px; }
+.buttons .a button.kill-on { background: #ff6b6b; color: #000; border-color: #ff6b6b; }
+.buttons .b button.kill-on { background: #ff6b6b; color: #000; border-color: #ff6b6b; }

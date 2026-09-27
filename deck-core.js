@@ -37,6 +37,11 @@ export class DeckCore {
     this.slip = false;
     this.slipPos = 0;
 
+    // Loop: [loopIn, loopIn + loopLen) in buffer samples.
+    this.loopOn = false;
+    this.loopIn = 0;
+    this.loopLen = 0;
+
     this.blocks = 0;
   }
 
@@ -57,6 +62,18 @@ export class DeckCore {
         this.spinning = false;
         this.follow = false;
         this.stroking = false;
+        this.loopOn = false;
+        break;
+      case 'loop':
+        if (m.on) {
+          this.loopIn = m.start * this.bufRate;
+          this.loopLen = Math.max(64, m.len * this.bufRate);
+          if (!this.loopOn) this.slipPos = this.pos;
+          this.loopOn = true;
+        } else if (this.loopOn) {
+          this.loopOn = false;
+          this.rejoin(); // with slip on, a loop is a "loop roll"
+        }
         break;
       case 'play':
         this.playing = m.value;
@@ -194,10 +211,14 @@ export class DeckCore {
       } else {
         this.pos = this.wrap(this.pos);
       }
+      // Loop back when playing forward past the loop end (not while scratching).
+      if (this.loopOn && !this.held && this.rate > 0 && this.pos >= this.loopIn + this.loopLen) {
+        this.pos -= this.loopLen;
+      }
 
       // Slip: while the record is touched, a silent copy of the track keeps
       // playing; otherwise it just shadows the real position.
-      if (this.slip && (this.held || this.spinning)) {
+      if (this.slip && (this.held || this.spinning || this.loopOn)) {
         if (this.playing) this.slipPos = this.wrap(this.slipPos + this.tempo * this.srRatio);
       } else {
         this.slipPos = this.pos;
@@ -206,7 +227,7 @@ export class DeckCore {
 
     if (ended) this.emit({ type: 'ended' });
     if (++this.blocks % blocksPerReport === 0) {
-      const slipping = this.slip && (this.held || this.spinning);
+      const slipping = this.slip && (this.held || this.spinning || this.loopOn);
       this.emit({
         type: 'pos',
         pos: this.pos / this.bufRate,

@@ -35,6 +35,8 @@ const state = {
   audioReady: null,
   toastUntil: 0,
   quantize: false,
+  page: 'deck',
+  tilt: null, // head-tilt filter: { deck, base, value }
 };
 
 const decks = [0, 1].map((i) => ({
@@ -68,6 +70,13 @@ const decks = [0, 1].map((i) => ({
   sync: false,
   slip: false,
   slipPos: null,
+  eq: { low: 0, mid: 0, high: 0 },
+  kill: { low: false, mid: false, high: false },
+  autoLowCut: false, // bass swap during Automix
+  loopOn: false,
+  loopStart: 0,
+  loopSize: 4, // beats
+  taps: [],
   held: false,
   loading: false,
 }));
@@ -126,9 +135,30 @@ async function initAudio() {
   soft.connect(ctx.destination);
   for (const d of decks) {
     d.node = useWorklet ? makeWorkletDeck() : makeScriptDeck();
+    d.eqNodes = {
+      low: Object.assign(ctx.createBiquadFilter(), { type: 'lowshelf' }),
+      mid: Object.assign(ctx.createBiquadFilter(), { type: 'peaking' }),
+      high: Object.assign(ctx.createBiquadFilter(), { type: 'highshelf' }),
+    };
+    d.eqNodes.low.frequency.value = 250;
+    d.eqNodes.mid.frequency.value = 1000;
+    d.eqNodes.mid.Q.value = 0.8;
+    d.eqNodes.high.frequency.value = 4000;
+    // Kill switches: a steep filter on top of the shelf, so a kill really removes the band.
+    d.killNodes = {
+      low: Object.assign(ctx.createBiquadFilter(), { type: 'highpass' }),
+      high: Object.assign(ctx.createBiquadFilter(), { type: 'lowpass' }),
+    };
+    d.killNodes.low.frequency.value = 10;
+    d.killNodes.high.frequency.value = 22000;
     d.filter = ctx.createBiquadFilter();
     d.xfGain = ctx.createGain();
-    d.node.connect(d.filter);
+    d.node.connect(d.eqNodes.low);
+    d.eqNodes.low.connect(d.eqNodes.mid);
+    d.eqNodes.mid.connect(d.eqNodes.high);
+    d.eqNodes.high.connect(d.killNodes.low);
+    d.killNodes.low.connect(d.killNodes.high);
+    d.killNodes.high.connect(d.filter);
     d.filter.connect(d.xfGain);
     d.xfGain.connect(master);
     d.node.port.onmessage = (e) => onDeckMessage(d, e.data);
@@ -202,6 +232,28 @@ function applyXf(instant = false) {
   });
 }
 
+// ---------- EQ ----------
+// Slider value -1..1: -1 = kill, below 0 cuts up to -24 dB, above 0 boosts up to +6 dB.
+const eqDb = (v) => (v <= -0.99 ? -40 : v < 0 ? v * 24 : v * 6);
+
+function applyEq(d, tc = 0.03) {
+  if (!d.eqNodes) return;
+  for (const band of ['low', 'mid', 'high']) {
+    const killed = d.kill[band] || (band === 'low' && d.autoLowCut) || d.eq[band] <= -0.99;
+    d.eqNodes[band].gain.setTargetAtTime(killed ? -40 : eqDb(d.eq[band]), ctx.currentTime, tc);
+    if (d.killNodes[band]) {
+      const hz = band === 'low' ? (killed ? 300 : 10) : killed ? 2500 : 22000;
+      d.killNodes[band].frequency.setTargetAtTime(hz, ctx.currentTime, tc);
+    }
+  }
+}
+
+function toggleKill(d, band) {
+  d.kill[band] = !d.kill[band];
+  applyEq(d, 0.008);
+  renderButtons();
+}
+
 // ---------- loading ----------
 
 async function loadTrack(d, item) {
@@ -250,6 +302,8 @@ async function loadTrack(d, item) {
     d.cue = d.offset;
     d.track = item;
     d.tempo = 1;
+    d.loopOn = false;
+    d.taps = [];
     d.pos = d.cue;
     d.rate = 0;
     const Lc = L.slice();
@@ -258,8 +312,7 @@ async function loadTrack(d, item) {
     post(d, { type: 'tempo', value: 1 });
     post(d, { type: 'seek', value: d.cue });
     post(d, { type: 'slip', value: d.slip });
-    d.el.disc.style.backgroundImage = item.art ? `url("${item.art}")` : '';
-    d.el.platter.classList.toggle('has-art', !!item.art);
+    showArt(d, item);
     toast(`${d.name} ← ${item.title}`);
   } catch (err) {
     reportError(`Couldn't load ${item.title}`, err);
@@ -274,6 +327,25 @@ async function loadTrack(d, item) {
 
 // Try each URL in turn. A download only fails if it can't connect or stops
 // receiving data — slow-but-steady connections are fine.
+// Album art on the platter, trying mirror URLs if the first one fails.
+function showArt(d, item) {
+  const urls = [item.art, ...(item.artAlts || [])].filter(Boolean);
+  d.el.disc.style.backgroundImage = '';
+  d.el.platter.classList.remove('has-art');
+  const tryNext = (i) => {
+    if (i >= urls.length || d.track !== item) return;
+    const img = new Image();
+    img.onload = () => {
+      if (d.track !== item) return;
+      d.el.disc.style.backgroundImage = `url("${urls[i]}")`;
+      d.el.platter.classList.add('has-art');
+    };
+    img.onerror = () => tryNext(i + 1);
+    img.src = urls[i];
+  };
+  tryNext(0);
+}
+
 async function fetchAudio(urls, onProgress) {
   let lastErr;
   for (const url of urls) {
@@ -448,11 +520,160 @@ function toggleSync(d) {
   renderButtons();
 }
 
+// ---------- loops & beat jump ----------
+
+const beatSecs = (d) => 60 / d.bpm; // one beat, in track time
+const fmtBeats = (b) => ({ 0.25: '¼', 0.5: '½' })[b] || String(b);
+
+function setLoop(d) {
+  post(d, { type: 'loop', on: d.loopOn, start: d.loopStart, len: d.loopSize * beatSecs(d) });
+}
+
+function toggleLoop(d) {
+  if (!d.track) return;
+  d.loopOn = !d.loopOn;
+  if (d.loopOn) {
+    const pos = estPos(d);
+    const b = beatSecs(d);
+    // Quantize: start on the beat just played, so the loop is in time.
+    d.loopStart = state.quantize ? Math.max(0, d.offset + Math.floor((pos - d.offset) / b) * b) : pos;
+  }
+  setLoop(d);
+  toast(d.loopOn ? `${d.name}: loop ${fmtBeats(d.loopSize)} beat${d.loopSize > 1 ? 's' : ''}` : `${d.name}: loop off`);
+  renderButtons();
+}
+
+function resizeLoop(d, factor) {
+  d.loopSize = clamp(d.loopSize * factor, 0.25, 32);
+  if (d.loopOn) setLoop(d);
+  toast(`${d.name}: loop / jump size ${fmtBeats(d.loopSize)}`);
+  renderButtons();
+}
+
+function beatJump(d, dir) {
+  if (!d.track) return;
+  const dist = dir * Math.max(1, d.loopSize) * beatSecs(d);
+  if (d.loopOn) {
+    d.loopStart = Math.max(0, d.loopStart + dist);
+    setLoop(d);
+  }
+  jumpTo(d, estPos(d) + dist);
+  toast(`${d.name}: jump ${dir > 0 ? '+' : '−'}${Math.max(1, d.loopSize)} beats`);
+}
+
+// ---------- tempo tools ----------
+
+function scaleBpm(d, factor) {
+  if (!d.track) return;
+  const bpm = d.bpm * factor;
+  if (bpm < 40 || bpm > 300) return toast(`${d.name}: ${bpm.toFixed(0)} BPM is out of range`);
+  d.bpm = bpm;
+  afterBpmChange(d);
+  toast(`${d.name}: ${(d.bpm * d.tempo).toFixed(1)} BPM`);
+}
+
+// Tap along with the beat: 4+ taps set the tempo, and the last tap marks a beat.
+function tapTempo(d) {
+  if (!d.track) return;
+  const now = performance.now();
+  if (d.taps.length && now - d.taps[d.taps.length - 1] > 2000) d.taps = [];
+  d.taps.push(now);
+  if (d.taps.length > 8) d.taps.shift();
+  if (d.taps.length < 4) return toast(`${d.name}: tap ${d.taps.length}… keep tapping on the beat`);
+  const avg = (d.taps[d.taps.length - 1] - d.taps[0]) / (d.taps.length - 1);
+  const heard = 60000 / avg; // BPM as heard (includes the tempo slider)
+  const bpm = heard / (d.playing ? d.tempo : 1);
+  if (bpm < 50 || bpm > 220) return toast(`${d.name}: tap steadier`);
+  d.bpm = Math.round(bpm * 10) / 10;
+  const b = beatSecs(d);
+  const pos = estPos(d);
+  d.offset = pos - Math.floor(pos / b) * b;
+  afterBpmChange(d);
+  toast(`${d.name}: tapped ${(d.bpm * d.tempo).toFixed(1)} BPM`);
+}
+
+function afterBpmChange(d) {
+  const other = decks[1 - d.i];
+  if (d.sync && other.track) matchTempo(d, other);
+  else if (other.sync && other.track) matchTempo(other, d);
+  if (d.loopOn) setLoop(d);
+  renderDeckText(d);
+}
+
+// ---------- pages ----------
+
+const PAGES = ['deck', 'loop', 'eq'];
+function nextPage() {
+  state.page = PAGES[(PAGES.indexOf(state.page) + 1) % PAGES.length];
+  for (const el of document.querySelectorAll('.page')) el.hidden = el.dataset.page !== state.page;
+  $('#pageName').textContent = { deck: 'Deck', loop: 'Loop', eq: 'EQ' }[state.page];
+  toast(`Controls: ${{ deck: 'Deck', loop: 'Loops & tempo', eq: 'EQ' }[state.page]}`);
+}
+
+// ---------- head-tilt filter (experimental) ----------
+// Tilt your head left/right to sweep the filter on the deck you're hearing.
+
+function liveDeck() {
+  return state.xf <= 0.5 ? decks[0] : decks[1];
+}
+
+function onTilt(e) {
+  const t = state.tilt;
+  if (!t || e.gamma == null) return;
+  if (t.base == null) t.base = e.gamma; // wherever your head is when it starts = neutral
+  let v = (e.gamma - t.base) / 30;
+  v = Math.abs(v) < 0.25 ? 0 : clamp((v - Math.sign(v) * 0.25) / 0.75, -1, 1); // dead zone
+  t.value += (v - t.value) * 0.3;
+  const d = liveDeck();
+  if (t.deck && t.deck !== d) {
+    t.deck.filterVal = 0;
+    applyFilter(t.deck);
+  }
+  t.deck = d;
+  d.filterVal = Math.abs(t.value) < 0.05 ? 0 : t.value;
+  applyFilter(d);
+  t.seen = true;
+}
+
+async function toggleTilt(row) {
+  if (state.tilt) {
+    window.removeEventListener('deviceorientation', onTilt);
+    if (state.tilt.deck) {
+      state.tilt.deck.filterVal = 0;
+      applyFilter(state.tilt.deck);
+    }
+    state.tilt = null;
+    toast('Head-tilt filter off');
+  } else {
+    try {
+      if (typeof DeviceOrientationEvent?.requestPermission === 'function') {
+        const res = await DeviceOrientationEvent.requestPermission();
+        if (res !== 'granted') return toast('Motion sensor permission denied');
+      }
+    } catch (err) {
+      return reportError('Motion sensor', err);
+    }
+    state.tilt = { deck: null, base: null, value: 0, seen: false };
+    window.addEventListener('deviceorientation', onTilt);
+    toast('Head-tilt filter on — tilt left = low-pass, right = high-pass');
+    setTimeout(() => {
+      if (state.tilt && !state.tilt.seen) toast('No motion sensor data from this device');
+    }, 2500);
+  }
+  if (row) {
+    row.value = state.tilt ? 'ON' : 'OFF';
+    row.on = !!state.tilt;
+    renderLibrary();
+  }
+}
+
 // ---------- automix ----------
 
 async function toggleAutomix() {
   await ensureAudio();
   if (state.automix) {
+    for (const d of decks) d.autoLowCut = false;
+    for (const d of decks) applyEq(d);
     state.automix = null;
     renderButtons();
     return toast('Automix cancelled');
@@ -474,6 +695,9 @@ async function toggleAutomix() {
 
   to.filterVal = 0;
   applyFilter(to);
+  // Bass swap: the incoming deck's bass stays out until halfway through.
+  to.autoLowCut = true;
+  applyEq(to, 0.01);
   matchTempo(to, from);
   alignPhase(to, from);
   to.playing = true;
@@ -500,13 +724,23 @@ function stepAutomix() {
   const e = p * p * (3 - 2 * p);
   state.xf = m.xf0 + (m.xf1 - m.xf0) * e;
   applyXf();
-  m.from.filterVal = p > 0.4 ? ((p - 0.4) / 0.6) * 0.75 : 0;
+  if (p >= 0.5 && !m.swapped) {
+    // Swap basslines so the two kick drums never play together.
+    m.swapped = true;
+    m.from.autoLowCut = true;
+    m.to.autoLowCut = false;
+    applyEq(m.from, 0.04);
+    applyEq(m.to, 0.04);
+  }
+  m.from.filterVal = p > 0.6 ? ((p - 0.6) / 0.4) * 0.5 : 0;
   applyFilter(m.from);
   if (p >= 1) {
     m.from.playing = false;
     post(m.from, { type: 'play', value: false });
     m.from.filterVal = 0;
+    m.from.autoLowCut = false;
     applyFilter(m.from);
+    applyEq(m.from);
     state.automix = null;
     renderButtons();
   }
@@ -550,7 +784,21 @@ function stroke(d, dir) {
 
 // ---------- sliders ----------
 
+const eqSlider = (band) => ({
+  get: (d) => d.eq[band],
+  set: (v, d) => {
+    d.eq[band] = Math.abs(v) < 0.05 ? 0 : clamp(v, -1, 1);
+    applyEq(d);
+  },
+  step: 0.125,
+  norm: (v) => (v + 1) / 2,
+  label: (v) => (v <= -0.99 ? 'KILL' : `${v > 0 ? '+' : ''}${Math.round(eqDb(v))}dB`),
+});
+
 const SLIDERS = {
+  eqLow: eqSlider('low'),
+  eqMid: eqSlider('mid'),
+  eqHigh: eqSlider('high'),
   xf: {
     get: () => state.xf,
     set: (v) => {
@@ -627,6 +875,10 @@ function renderButtons() {
     d.el.play.classList.toggle('on', d.playing);
     d.el.sync.classList.toggle('on', d.sync);
     d.el.slip.classList.toggle('on', d.slip);
+    for (const b of document.querySelectorAll(`[data-action="kill"][data-deck="${d.i}"]`)) b.classList.toggle('kill-on', d.kill[b.dataset.band]);
+    const loopBtn = $(`[data-action="loop"][data-deck="${d.i}"]`);
+    loopBtn.textContent = `LOOP ${fmtBeats(d.loopSize)}`;
+    loopBtn.classList.toggle('on', d.loopOn);
   }
   $('[data-action="automix"]').classList.toggle('on', !!state.automix);
   $('[data-action="quantize"]').classList.toggle('on', state.quantize);
@@ -653,6 +905,13 @@ function drawWave(d, pos) {
   const start = pos - span / 2;
   const n = d.peaks.length;
   const loop = d.track?.loop;
+  if (d.loopOn) {
+    // Loop region
+    const x0 = ((d.loopStart - start) / span) * W;
+    const x1 = ((d.loopStart + d.loopSize * (60 / d.bpm) - start) / span) * W;
+    g.fillStyle = 'rgba(255, 210, 63, 0.22)';
+    g.fillRect(Math.max(0, x0), 0, Math.min(W, x1) - Math.max(0, x0), H);
+  }
   g.fillStyle = COLORS[d.i];
   for (let x = 0; x < W; x++) {
     const i0 = Math.floor((start + (x / W) * span) * PEAKS_PER_SEC);
@@ -736,7 +995,7 @@ function renderHint() {
 // ---------- focus navigation ----------
 
 function focusables() {
-  return [...document.querySelectorAll('#app .focusable')];
+  return [...document.querySelectorAll('#app .focusable')].filter((el) => el.getClientRects().length);
 }
 
 function moveFocus(key) {
@@ -825,6 +1084,20 @@ function activate(el) {
       return toggleAutomix();
     case 'quantize':
       return toggleQuantize();
+    case 'page':
+      return nextPage();
+    case 'kill':
+      return toggleKill(d, el.dataset.band);
+    case 'loop':
+      return toggleLoop(d);
+    case 'loopsize':
+      return resizeLoop(d, +el.dataset.factor);
+    case 'jump':
+      return beatJump(d, +el.dataset.dir);
+    case 'bpm':
+      return scaleBpm(d, +el.dataset.factor);
+    case 'tap':
+      return tapTempo(d);
   }
   if (el.dataset.kind) engage(el);
 }
@@ -861,6 +1134,7 @@ async function buildHome() {
       : []),
     { kind: 'folder', label: 'Netlabels · Hip-Hop', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'hip hop' }) },
     { kind: 'folder', label: 'Netlabels · Electronic', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'electronic' }) },
+    { kind: 'setting', icon: '↔', label: 'Head-tilt filter', sub: 'Experimental · tilt your head to sweep the filter', value: 'OFF', run: (row) => toggleTilt(row) },
     { kind: 'setting', label: 'Device check', sub: 'What audio features these glasses support', run: showDeviceCheck, icon: '🔧' },
     ...DEMOS.map((item) => ({ kind: 'track', item })),
   ];
@@ -1025,7 +1299,8 @@ function rowHTML(row, i) {
     return `<li class="row folder${sel}">${row.art ? `<img src="${esc(row.art)}" alt="">` : '<span class="ico">♫</span>'}<span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="chev">›</span></li>`;
   const t = row.item;
   const badge = t.style ? 'DEMO' : t.preview ? '0:30' : t.file || !t.source ? 'FILE' : 'FULL';
-  const art = t.art ? `<img src="${esc(t.art)}" alt="">` : `<span class="ico">●</span>`;
+  const alts = (t.artAlts || []).join(' ');
+  const art = t.art ? `<img src="${esc(t.art)}" data-alts="${esc(alts)}" alt="">` : `<span class="ico">●</span>`;
   const bpm = t.bpm ? ` · ${Math.round(t.bpm)} BPM` : t.license ? ` · ${t.license}` : '';
   return `<li class="row${sel}">${art}<span class="txt"><b>${esc(t.title)}</b><small>${esc(t.artist || '')}${bpm}</small></span><span class="badge">${badge}</span></li>`;
 }
@@ -1093,6 +1368,21 @@ function libraryKey(e) {
       backLater(userBack);
   }
 }
+
+// Library artwork: on a broken image, try the next mirror.
+libList.addEventListener(
+  'error',
+  (e) => {
+    const img = e.target;
+    if (img.tagName !== 'IMG') return;
+    const [next, ...rest] = (img.dataset.alts || '').split(' ').filter(Boolean);
+    if (next) {
+      img.dataset.alts = rest.join(' ');
+      img.src = next;
+    } else img.style.visibility = 'hidden';
+  },
+  true,
+);
 
 searchInput.addEventListener('change', () => runSearch(searchInput.value));
 searchInput.addEventListener('search', () => runSearch(searchInput.value));

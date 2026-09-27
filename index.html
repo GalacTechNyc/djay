@@ -33,9 +33,10 @@
         <div class="disc"><div class="label">A</div><div class="marker"></div></div>
       </div>
       <div class="center">
-        <button class="focusable" data-action="library" data-hint="Browse Apple Music, Audius and demo tracks">♫<span>Library</span></button>
+        <button class="focusable" data-action="library" data-hint="Browse music: Apple Music, Audius, Jamendo, Internet Archive, demos">♫<span>Library</span></button>
         <button class="focusable" data-action="automix" data-hint="Beat-matched 16-beat blend to the other deck">⇄<span>Automix</span></button>
-        <button class="focusable" data-action="quantize" data-hint="Quantize: play, cue and scratch snap to the beat">⌗<span>Quantize</span></button>
+        <button class="focusable" data-action="quantize" data-hint="Quantize: play, cue, loops and scratch snap to the beat">⌗<span>Quantize</span></button>
+        <button class="focusable" data-action="page" data-hint="Switch controls: Deck · Loop · EQ">☰<span id="pageName">Deck</span></button>
       </div>
       <div class="platter b focusable" id="platB" tabindex="0" data-deck="1" data-kind="platter"
            data-hint="Tap to grab the record, then swipe to scratch">
@@ -43,6 +44,7 @@
       </div>
     </section>
 
+    <div class="page" data-page="deck">
     <section class="buttons">
       <div class="grp a">
         <button class="focusable" data-action="play" data-deck="0" data-hint="Play / pause deck A">▶</button>
@@ -61,7 +63,6 @@
         <button class="focusable" data-action="play" data-deck="1" data-hint="Play / pause deck B">▶</button>
       </div>
     </section>
-
     <section class="sliders">
       <div class="grp a">
         <div class="slider focusable" tabindex="0" data-kind="slider" data-param="tempo" data-deck="0" data-hint="Tap, then swipe to change A's tempo">
@@ -80,6 +81,77 @@
         </div>
       </div>
     </section>
+    </div>
+
+    <div class="page" data-page="loop" hidden>
+    <section class="buttons">
+      <div class="grp a">
+        <button class="focusable" data-action="jump" data-deck="0" data-dir="-1" data-hint="Jump back by the loop size">◀◀</button>
+        <button class="focusable" data-action="loop" data-deck="0" data-hint="Loop on/off (on the beat with Quantize)">LOOP 4</button>
+        <button class="focusable" data-action="loopsize" data-deck="0" data-factor="0.5" data-hint="Halve the loop size">½</button>
+        <button class="focusable" data-action="loopsize" data-deck="0" data-factor="2" data-hint="Double the loop size">×2</button>
+        <button class="focusable" data-action="jump" data-deck="0" data-dir="1" data-hint="Jump forward by the loop size">▶▶</button>
+      </div>
+      <div class="grp b">
+        <button class="focusable" data-action="jump" data-deck="1" data-dir="-1" data-hint="Jump back by the loop size">◀◀</button>
+        <button class="focusable" data-action="loop" data-deck="1" data-hint="Loop on/off (on the beat with Quantize)">LOOP 4</button>
+        <button class="focusable" data-action="loopsize" data-deck="1" data-factor="0.5" data-hint="Halve the loop size">½</button>
+        <button class="focusable" data-action="loopsize" data-deck="1" data-factor="2" data-hint="Double the loop size">×2</button>
+        <button class="focusable" data-action="jump" data-deck="1" data-dir="1" data-hint="Jump forward by the loop size">▶▶</button>
+      </div>
+    </section>
+    <section class="buttons row2">
+      <div class="grp a">
+        <button class="focusable" data-action="bpm" data-deck="0" data-factor="0.5" data-hint="Tempo detected double? Halve it">BPM ÷2</button>
+        <button class="focusable" data-action="tap" data-deck="0" data-hint="Tap along with the beat to set the tempo">TAP</button>
+        <button class="focusable" data-action="bpm" data-deck="0" data-factor="2" data-hint="Tempo detected half? Double it">BPM ×2</button>
+      </div>
+      <div class="grp b">
+        <button class="focusable" data-action="bpm" data-deck="1" data-factor="0.5" data-hint="Tempo detected double? Halve it">BPM ÷2</button>
+        <button class="focusable" data-action="tap" data-deck="1" data-hint="Tap along with the beat to set the tempo">TAP</button>
+        <button class="focusable" data-action="bpm" data-deck="1" data-factor="2" data-hint="Tempo detected half? Double it">BPM ×2</button>
+      </div>
+    </section>
+    </div>
+
+    <div class="page" data-page="eq" hidden>
+    <section class="buttons">
+      <div class="grp a">
+        <button class="focusable" data-action="kill" data-deck="0" data-band="low" data-hint="Cut the bass">KILL LO</button>
+        <button class="focusable" data-action="kill" data-deck="0" data-band="mid" data-hint="Cut the mids">KILL MID</button>
+        <button class="focusable" data-action="kill" data-deck="0" data-band="high" data-hint="Cut the highs">KILL HI</button>
+      </div>
+      <div class="grp b">
+        <button class="focusable" data-action="kill" data-deck="1" data-band="low" data-hint="Cut the bass">KILL LO</button>
+        <button class="focusable" data-action="kill" data-deck="1" data-band="mid" data-hint="Cut the mids">KILL MID</button>
+        <button class="focusable" data-action="kill" data-deck="1" data-band="high" data-hint="Cut the highs">KILL HI</button>
+      </div>
+    </section>
+    <section class="sliders eq">
+      <div class="grp a">
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="eqLow" data-deck="0" data-hint="Tap, then swipe: bass">
+          <span class="name">LOW</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="eqMid" data-deck="0" data-hint="Tap, then swipe: mids">
+          <span class="name">MID</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="eqHigh" data-deck="0" data-hint="Tap, then swipe: highs">
+          <span class="name">HIGH</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+      </div>
+      <div class="grp b">
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="eqLow" data-deck="1" data-hint="Tap, then swipe: bass">
+          <span class="name">LOW</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="eqMid" data-deck="1" data-hint="Tap, then swipe: mids">
+          <span class="name">MID</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+        <div class="slider focusable" tabindex="0" data-kind="slider" data-param="eqHigh" data-deck="1" data-hint="Tap, then swipe: highs">
+          <span class="name">HIGH</span><span class="val"></span><div class="track"><div class="thumb"></div></div>
+        </div>
+      </div>
+    </section>
+    </div>
 
     <section class="xfader">
       <div class="slider xf focusable" tabindex="0" data-kind="slider" data-param="xf" data-hint="Tap, then swipe to crossfade A ◀ ▶ B">

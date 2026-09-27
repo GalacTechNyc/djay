@@ -68,6 +68,17 @@ function audiusUrls(t) {
   return [...new Set(urls)];
 }
 
+function audiusArtAlts(artwork) {
+  const main = artwork?.['480x480'] || artwork?.['150x150'];
+  if (!main || !artwork.mirrors) return [];
+  try {
+    const u = new URL(main);
+    return artwork.mirrors.map((host) => host + u.pathname).filter((x) => x !== main);
+  } catch {
+    return [];
+  }
+}
+
 function fromAudius(t) {
   const urls = audiusUrls(t);
   return {
@@ -77,6 +88,8 @@ function fromAudius(t) {
     url: urls[0],
     urls,
     art: t.artwork?.['480x480'] || t.artwork?.['150x150'],
+    // Same image on Audius's other servers, tried if the first one fails.
+    artAlts: audiusArtAlts(t.artwork),
     bpm: t.bpm && t.bpm > 60 && t.bpm < 200 ? t.bpm : undefined,
     duration: t.duration,
     source: 'Audius',
@@ -167,7 +180,8 @@ function decodeEntities(str) {
 // Jamendo — free CC music, needs a client ID in config.js.
 export const jamendoEnabled = () => !!JAMENDO_CLIENT_ID;
 
-async function jamendo(params) {
+// Jamendo occasionally answers with an empty list; one retry fixes it.
+async function jamendo(params, retry = true) {
   const q = new URLSearchParams({
     client_id: JAMENDO_CLIENT_ID,
     format: 'json',
@@ -180,6 +194,10 @@ async function jamendo(params) {
   const res = await fetch(`https://api.jamendo.com/v3.0/tracks/?${q}`);
   const data = await res.json();
   if (data.headers?.status !== 'success') throw new Error(data.headers?.error_message || 'Jamendo failed');
+  if (!data.results.length && retry) {
+    await new Promise((r) => setTimeout(r, 400));
+    return jamendo(params, false);
+  }
   return data.results
     .filter((t) => t.audio && t.duration < 900)
     .map((t) => ({
