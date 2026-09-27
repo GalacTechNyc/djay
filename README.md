@@ -29,10 +29,16 @@ No build step. Plain HTML/CSS/JS, about 60 KB in total.
 
 To practice a baby scratch: grab the platter, then swipe right, left, right, left in time with the beat on the "ahh" vocal in the demo tracks.
 
+### Cueing
+
+- **CUE** sets the cue point right where the track is, playing or paused.
+- **↩** (hot cue) jumps to the cue point, keeping play/pause as it is.
+- **⏮** jumps to the beginning of the track.
+
 ### Slip and Quantize
 
 - **SLIP** (per deck): while you scratch, hold or spin back the record, the track keeps running silently underneath. A yellow line on the waveform shows where. Let go and playback rejoins it, so you never lose the beat.
-- **QUANTIZE** (middle column): pressing play starts a deck in step with the other deck's beats (or on its own nearest beat if the other isn't playing). Cue points snap to the nearest beat, and letting go of a scratch lands back in step with the other deck.
+- **QUANTIZE** (middle column): pressing play starts a deck in step with the other deck's beats (or on its own nearest beat if the other isn't playing). Cue points snap to the nearest beat, ↩ and ⏮ jumps keep your place in the beat, and letting go of a scratch lands back in step with the other deck.
 
 Swipe scratches are shaped like a hand movement: each swipe moves the record 0.25 s with an ease-in/ease-out curve, so strokes start, stop and reverse smoothly.
 

@@ -43,7 +43,7 @@ button {
 .focusable.engaged { border-color: var(--hot) !important; box-shadow: 0 0 22px rgba(255, 210, 63, 0.7) !important; }
 
 /* ---------- header ---------- */
-header { position: absolute; top: 6px; left: 10px; right: 10px; height: 92px; display: flex; justify-content: space-between; }
+header { position: absolute; top: 6px; left: 7px; right: 7px; height: 92px; display: flex; justify-content: space-between; }
 .deck-head { width: 280px; }
 .deck-head.b { text-align: right; }
 .title { font-size: 20px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -88,9 +88,10 @@ canvas { display: block; width: 280px; height: 40px; }
 .center button.on { border-color: var(--hot); color: var(--hot); }
 
 /* ---------- transport ---------- */
-.buttons { position: absolute; top: 336px; left: 10px; right: 10px; height: 56px; display: flex; justify-content: space-between; }
-.grp { display: flex; gap: 6px; width: 284px; }
-.buttons button { flex: 1; min-width: 0; padding: 0; font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
+.buttons { position: absolute; top: 336px; left: 7px; right: 7px; height: 56px; display: flex; justify-content: space-between; }
+.grp { display: flex; gap: 4px; width: 286px; }
+.buttons button { flex: 1; min-width: 0; padding: 0; font-size: 15px; font-weight: 700; letter-spacing: 0; border-radius: 10px; }
+.buttons button[data-action="play"], .buttons button[data-action="hotcue"], .buttons button[data-action="start"] { font-size: 20px; }
 .buttons .a button.on { background: var(--a); color: #000; border-color: var(--a); }
 .buttons .b button.on { background: var(--b); color: #000; border-color: var(--b); }
 

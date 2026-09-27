@@ -347,19 +347,38 @@ function toggleQuantize() {
   renderButtons();
 }
 
+// CUE: set the cue point right here, playing or paused.
 function cue(d) {
   if (!d.track) return;
-  if (d.playing) {
-    d.playing = false;
-    post(d, { type: 'play', value: false });
-    post(d, { type: 'seek', value: d.cue });
-    toast(`${d.name}: back to cue`);
-  } else {
-    d.cue = state.quantize ? snapToBeat(d, estPos(d)) : estPos(d);
-    if (state.quantize) post(d, { type: 'seek', value: d.cue });
-    toast(`${d.name}: cue set ${fmt(d.cue)}${state.quantize ? ' (on beat)' : ''}`);
+  d.cue = state.quantize ? snapToBeat(d, estPos(d)) : estPos(d);
+  toast(`${d.name}: cue set at ${fmt(d.cue)}${state.quantize ? ' (on beat)' : ''}`);
+}
+
+// Jump within the track, keeping play/pause as is. With quantize on and the
+// deck playing, the jump keeps the current position within the beat so the
+// mix stays in time.
+function jumpTo(d, t) {
+  if (!d.track) return;
+  if (state.quantize && d.playing) {
+    const beat = 60 / d.bpm;
+    const within = (((estPos(d) - d.offset) % beat) + beat) % beat;
+    t = snapToBeat(d, t) + within;
   }
-  renderButtons();
+  post(d, { type: 'seek', value: Math.max(0, t) });
+}
+
+// ↩ hot cue: jump to the cue point.
+function hotCue(d) {
+  if (!d.track) return;
+  jumpTo(d, d.cue);
+  toast(`${d.name}: ↩ cue ${fmt(d.cue)}`);
+}
+
+// ⏮ back to the beginning of the track.
+function toStart(d) {
+  if (!d.track) return;
+  jumpTo(d, 0);
+  toast(`${d.name}: ⏮ start`);
 }
 
 function setTempo(d, t) {
@@ -775,6 +794,10 @@ function activate(el) {
       return togglePlay(d);
     case 'cue':
       return cue(d);
+    case 'hotcue':
+      return hotCue(d);
+    case 'start':
+      return toStart(d);
     case 'sync':
       return toggleSync(d);
     case 'slip':
