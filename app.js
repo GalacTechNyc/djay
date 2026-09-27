@@ -256,6 +256,7 @@ async function loadTrack(d, item) {
     d.loading = false;
     renderDeckText(d);
     renderButtons();
+    renderSliders(); // tempo resets to 0% for the new track
   }
 }
 
@@ -460,7 +461,8 @@ async function toggleAutomix() {
   matchTempo(to, from);
   alignPhase(to, from);
   to.playing = true;
-  post(to, { type: 'play', value: true });
+  // Full speed at once (no motor spin-up), so the blend lands on the beat.
+  post(to, { type: 'play', value: true, instant: true });
 
   const beats = 16;
   state.automix = {
@@ -760,7 +762,7 @@ function engage(el) {
   histPush();
 }
 
-function disengage(spin = false, fromPop = false) {
+function disengage(spin = false) {
   const el = state.engaged;
   if (!el) return;
   el.classList.remove('engaged', 'cut');
@@ -774,7 +776,6 @@ function disengage(spin = false, fromPop = false) {
     }
     if (spin) post(d, { type: 'spinback', value: 6 });
   }
-  if (!fromPop) histUnwind();
 }
 
 // Back from a key: skip it if the glasses already did a history back for
@@ -856,49 +857,38 @@ async function buildHome() {
   if (library.open) renderLibrary();
 }
 
-// The glasses may deliver "back" as history navigation rather than Escape,
-// so each Library screen is also a history entry. (Meta allows 5 entries;
-// the deepest Library path uses 4 including the page itself.)
-let histDepth = 0;
-let skipPops = 0;
+// The glasses may deliver "back" as history navigation rather than Escape.
+// While anything is open (Library, a grabbed control) the app keeps one spare
+// history entry as a "back trap" and handles back itself, one level at a time.
+// It never navigates history itself (history.back/go are asynchronous and can
+// race with the next push, which could leave the app).
+let trapArmed = false;
 let lastPopAt = -Infinity;
 
 function histPush() {
+  if (trapArmed) return;
   try {
-    history.pushState({ djay: histDepth + 1 }, '');
-    histDepth++;
+    history.pushState({ djay: 'back-trap' }, '');
+    trapArmed = true;
   } catch {}
-}
-
-function histUnwind() {
-  if (histDepth > 0) {
-    skipPops++;
-    history.go(-histDepth);
-    histDepth = 0;
-  }
 }
 
 window.addEventListener('popstate', () => {
   lastPopAt = performance.now();
-  if (skipPops) {
-    skipPops--;
-    return;
-  }
-  histDepth = Math.max(0, histDepth - 1);
+  trapArmed = false;
   if (library.open) goBack(true);
-  else if (state.engaged) disengage(false, true);
+  else if (state.engaged) disengage();
+  if (library.open || state.engaged) histPush(); // re-arm for the next back
 });
 
-// Back from a key or the Back row: go through history so both paths agree.
+// Back from a key or the Back row.
 function userBack() {
-  if (histDepth > 0) history.back();
-  else goBack(true);
+  goBack(true);
 }
 
 function openLibrary(forDeck = null) {
-  const reuse = !!state.engaged; // its history entry becomes the Library's
-  disengage(false, true);
-  if (!library.open && !reuse) histPush();
+  disengage();
+  histPush();
   library.open = true;
   library.forDeck = forDeck;
   libEl.hidden = false;
@@ -907,7 +897,6 @@ function openLibrary(forDeck = null) {
 }
 
 function closeLibrary() {
-  histUnwind();
   library.open = false;
   libEl.hidden = true;
   searchInput.blur();
@@ -1215,4 +1204,4 @@ buildHome();
 $('[data-action="library"]').focus();
 requestAnimationFrame(frame);
 
-window.djay = { decks, state, library }; // handy for debugging in the console
+window.djay = { decks, state, library, load: (i, item) => loadTrack(decks[i], item) }; // handy for debugging in the console

@@ -157,6 +157,13 @@ export async function archiveTracks(id, { creator, license } = {}) {
     }));
 }
 
+// Jamendo sends some names HTML-escaped ("Axl &amp; Arth").
+function decodeEntities(str) {
+  const t = document.createElement('textarea');
+  t.innerHTML = str ?? '';
+  return t.value;
+}
+
 // Jamendo — free CC music, needs a client ID in config.js.
 export const jamendoEnabled = () => !!JAMENDO_CLIENT_ID;
 
@@ -177,8 +184,8 @@ async function jamendo(params) {
     .filter((t) => t.audio && t.duration < 900)
     .map((t) => ({
       id: `jm-${t.id}`,
-      title: t.name,
-      artist: t.artist_name,
+      title: decodeEntities(t.name),
+      artist: decodeEntities(t.artist_name),
       url: t.audio,
       urls: [t.audio, `https://mp3l.jamendo.com/?trackid=${t.id}&format=mp31`],
       art: t.image,
