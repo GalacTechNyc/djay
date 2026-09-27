@@ -1,4 +1,5 @@
 import { DEMOS, renderDemo } from './synth.js';
+import { DeckCore } from './deck-core.js';
 import { computePeaks, detectTempo, PEAKS_PER_SEC } from './analyze.js';
 import { searchAppleMusic, appleMusicTopSongs, searchAudius, audiusTrending } from './music.js';
 
@@ -57,14 +58,31 @@ const demoCache = new Map();
 // ---------- audio ----------
 
 function ensureAudio() {
-  if (!state.audioReady) state.audioReady = initAudio();
+  if (!state.audioReady) {
+    state.audioReady = initAudio().catch((err) => {
+      state.audioReady = null; // let the next press retry
+      throw err;
+    });
+  }
   if (ctx && ctx.state === 'suspended') ctx.resume();
   return state.audioReady;
 }
 
 async function initAudio() {
-  ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
-  await ctx.audioWorklet.addModule('deck-worklet.js');
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) throw new Error('This browser has no Web Audio support');
+  ctx = ctx || new AC({ latencyHint: 'interactive' });
+  let useWorklet = !!(ctx.audioWorklet && window.AudioWorkletNode) && !/[?&]engine=fallback/.test(location.search);
+  if (useWorklet) {
+    try {
+      await ctx.audioWorklet.addModule('deck-worklet.js');
+    } catch (err) {
+      console.warn('AudioWorklet failed, using fallback engine', err);
+      useWorklet = false;
+    }
+  }
+  state.engine = useWorklet ? 'AudioWorklet' : 'ScriptProcessor (fallback)';
+
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -3;
   limiter.knee.value = 0;
@@ -73,20 +91,36 @@ async function initAudio() {
   limiter.release.value = 0.1;
   master = ctx.createGain();
   master.gain.value = 0.9;
-  master.connect(limiter).connect(ctx.destination);
+  master.connect(limiter);
+  limiter.connect(ctx.destination);
   for (const d of decks) {
-    d.node = new AudioWorkletNode(ctx, 'deck', {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [2],
-    });
+    d.node = useWorklet ? makeWorkletDeck() : makeScriptDeck();
     d.filter = ctx.createBiquadFilter();
     d.xfGain = ctx.createGain();
-    d.node.connect(d.filter).connect(d.xfGain).connect(master);
+    d.node.connect(d.filter);
+    d.filter.connect(d.xfGain);
+    d.xfGain.connect(master);
     d.node.port.onmessage = (e) => onDeckMessage(d, e.data);
     applyFilter(d);
   }
   applyXf(true);
+}
+
+function makeWorkletDeck() {
+  return new AudioWorkletNode(ctx, 'deck', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2] });
+}
+
+// Same engine on the main thread, for browsers without AudioWorklet.
+function makeScriptDeck() {
+  const node = ctx.createScriptProcessor(1024, 0, 2);
+  const port = { onmessage: null, postMessage: (msg) => core.onMessage(msg) };
+  const core = new DeckCore(ctx.sampleRate, (msg) => port.onmessage?.({ data: msg }));
+  node.onaudioprocess = (e) => {
+    const out = e.outputBuffer;
+    core.render(out.getChannelData(0), out.getChannelData(1), 1);
+  };
+  node.port = port;
+  return node;
 }
 
 const post = (d, msg, transfer) => d.node?.port.postMessage(msg, transfer || []);
@@ -138,7 +172,11 @@ function applyXf(instant = false) {
 // ---------- loading ----------
 
 async function loadTrack(d, item) {
-  await ensureAudio();
+  try {
+    await ensureAudio();
+  } catch (err) {
+    return reportError('Audio engine failed', err);
+  }
   if (d.loading) return;
   d.loading = true;
   d.playing = false;
@@ -158,7 +196,10 @@ async function loadTrack(d, item) {
     } else {
       const src = item.file ? item.file : await fetchAudio(item.url);
       const ab = src instanceof ArrayBuffer ? src : await src.arrayBuffer();
-      buf = await ctx.decodeAudioData(ab);
+      buf = await new Promise((resolve, reject) => {
+        const p = ctx.decodeAudioData(ab, resolve, (e) => reject(e || new Error('Audio format not supported')));
+        p?.catch?.(reject);
+      });
     }
     const L = buf.getChannelData(0);
     const R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L;
@@ -181,8 +222,7 @@ async function loadTrack(d, item) {
     d.el.platter.classList.toggle('has-art', !!item.art);
     toast(`${d.name} ← ${item.title}`);
   } catch (err) {
-    console.error(err);
-    toast(`Couldn't load: ${err.message || err}`);
+    reportError(`Couldn't load ${item.title}`, err);
     d.track = null;
   } finally {
     d.loading = false;
@@ -192,15 +232,28 @@ async function loadTrack(d, item) {
 }
 
 async function fetchAudio(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.arrayBuffer();
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const res = await fetch(url, { signal: ctl.signal });
+    if (!res.ok) throw new Error(`download failed (HTTP ${res.status})`);
+    return await res.arrayBuffer();
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('download timed out');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ---------- transport ----------
 
 async function togglePlay(d) {
-  await ensureAudio();
+  try {
+    await ensureAudio();
+  } catch (err) {
+    return reportError('Audio engine failed', err);
+  }
   if (!d.track) return openLibrary(d.i);
   d.playing = !d.playing;
   post(d, { type: 'play', value: d.playing });
@@ -511,6 +564,15 @@ function toast(msg, ms = 1800) {
   state.toastUntil = performance.now() + ms;
 }
 
+function reportError(what, err) {
+  const msg = `${what}: ${err?.message || err?.name || err || 'unknown error'}`;
+  console.error(msg, err);
+  state.lastError = msg;
+  toast(msg, 6000);
+}
+window.addEventListener('error', (e) => reportError('Error', e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => reportError('Error', e.reason));
+
 function renderHint() {
   hintEl.classList.remove('toast');
   const el = state.engaged || document.activeElement;
@@ -627,6 +689,7 @@ async function buildHome() {
       sub: 'Scratch by dragging on the band · app reloads',
       run: toggleDragMode,
     },
+    { kind: 'setting', label: 'Device check', sub: 'What audio features these glasses support', run: showDeviceCheck, icon: '🔧' },
     ...DEMOS.map((item) => ({ kind: 'track', item })),
   ];
   library.home = rows;
@@ -664,6 +727,45 @@ function showRows(title, rows) {
   renderLibrary();
 }
 
+async function showDeviceCheck() {
+  const yes = (v) => (v ? 'Yes' : 'No');
+  const a = document.createElement('audio');
+  const can = (t) => a.canPlayType(t) || 'No';
+  const rows = [
+    { label: 'Web Audio', value: yes(window.AudioContext || window.webkitAudioContext), ok: !!(window.AudioContext || window.webkitAudioContext) },
+    { label: 'AudioWorklet', value: yes(window.AudioWorkletNode) + ' (the app falls back if not)', ok: !!window.AudioWorkletNode },
+    { label: 'Offline rendering (demo tracks)', value: yes(window.OfflineAudioContext || window.webkitOfflineAudioContext), ok: !!(window.OfflineAudioContext || window.webkitOfflineAudioContext) },
+    { label: 'MP3 playback (Audius)', value: can('audio/mpeg'), ok: !!a.canPlayType('audio/mpeg') },
+    { label: 'AAC playback (Apple Music)', value: can('audio/mp4; codecs="mp4a.40.2"'), ok: !!a.canPlayType('audio/mp4; codecs="mp4a.40.2"') },
+  ];
+  let engine = state.engine;
+  try {
+    await ensureAudio();
+    engine = state.engine;
+    rows.push({ label: 'Audio engine', value: `${engine} · ${ctx.sampleRate} Hz · ${ctx.state}`, ok: ctx.state === 'running' });
+  } catch (err) {
+    rows.push({ label: 'Audio engine', value: `Failed: ${err?.message || err}`, ok: false });
+  }
+  for (const [label, url] of [
+    ['Apple Music reachable', 'https://itunes.apple.com/search?term=test&limit=1&media=music'],
+    ['Audius reachable', 'https://api.audius.co/v1/tracks/trending?limit=1&app_name=djay-glasses'],
+  ]) {
+    try {
+      const res = await fetch(url);
+      rows.push({ label, value: res.ok ? 'Yes' : `HTTP ${res.status}`, ok: res.ok });
+    } catch (err) {
+      rows.push({ label, value: `No: ${err?.message || err}`, ok: false });
+    }
+  }
+  rows.push({ label: 'Last error', value: state.lastError || 'None', ok: !state.lastError });
+  library.view = 'list';
+  library.homeIdx = library.idx;
+  library.rows = [{ kind: 'back', label: '‹ Back' }, ...rows.map((r) => ({ kind: 'info', ...r }))];
+  library.idx = 0;
+  libTitle.textContent = 'Device check';
+  renderLibrary();
+}
+
 function goHome() {
   library.view = 'home';
   library.rows = library.home;
@@ -696,7 +798,11 @@ function rowHTML(row, i) {
   if (row.kind === 'search') return `<li class="row search-row${sel}" data-i="${i}"></li>`;
   if (row.kind === 'back') return `<li class="row back${sel}">${row.label}</li>`;
   if (row.kind === 'setting')
-    return `<li class="row folder${sel}"><span class="ico">✋</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="badge${DRAG_MODE ? ' on' : ''}">${DRAG_MODE ? 'ON' : 'OFF'}</span></li>`;
+    return row.icon
+      ? `<li class="row folder${sel}"><span class="ico">${row.icon}</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="chev">›</span></li>`
+      : `<li class="row folder${sel}"><span class="ico">✋</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="badge${DRAG_MODE ? ' on' : ''}">${DRAG_MODE ? 'ON' : 'OFF'}</span></li>`;
+  if (row.kind === 'info')
+    return `<li class="row info${sel}"><span class="txt"><b>${esc(row.label)}</b><small class="${row.ok === false ? 'bad' : row.ok ? 'good' : ''}">${esc(row.value)}</small></span></li>`;
   if (row.kind === 'folder')
     return `<li class="row folder${sel}"><span class="ico">♫</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="chev">›</span></li>`;
   const t = row.item;
@@ -832,9 +938,9 @@ document.addEventListener('keydown', (e) => {
 
 let drag = null;
 let gesture = null;
-let lastRealKeyAt = 0;
-let lastSynthAt = 0;
-let lastDragEndAt = 0;
+let lastRealKeyAt = -Infinity;
+let lastSynthAt = -Infinity;
+let lastDragEndAt = -Infinity;
 
 function startScratch(e, d) {
   if (!d.track) return;
@@ -952,4 +1058,4 @@ $('[data-action="library"]').focus();
 if (DRAG_MODE) toast('Drag scratch ON — grab a record, then drag', 3000);
 requestAnimationFrame(frame);
 
-window.djay = { decks, state, library }; // handy for debugging in the console
+window.djay = { decks, state, library, input: () => ({ now: performance.now(), lastRealKeyAt, lastSynthAt, lastDragEndAt, drag: !!drag, gesture: !!gesture }) }; // handy for debugging in the console

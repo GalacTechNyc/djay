@@ -59,6 +59,10 @@ python3 -m http.server 8600
 
 Open http://localhost:8600 in Chrome. The arrow keys stand in for band swipes, Enter for a pinch, and Escape for back. You can also drag the platters with the mouse, or drop an audio file on the left or right half of the page to load it onto that deck. For a realistic preview, use Meta's **Ray-Ban Display Simulator** Chrome extension.
 
+## Troubleshooting on the glasses
+
+If tracks won't load or play, open **Library → Device check**. It shows which audio features the glasses support, whether Apple Music and Audius are reachable, and the last error. Errors also appear in the bottom bar. If the main audio engine (AudioWorklet) is missing, the app switches to a fallback automatically; add `?engine=fallback` to the URL to force it.
+
 ## Put it on the glasses
 
 1. Host the folder on any HTTPS host. GitHub Pages works: repo **Settings → Pages → Deploy from branch → `main` / root**. So does Vercel or Netlify.
@@ -68,7 +72,8 @@ Open http://localhost:8600 in Chrome. The arrow keys stand in for band swipes, E
 
 | File | What |
 |---|---|
-| `deck-worklet.js` | Turntable audio engine: variable-speed, reversible playback, motor inertia, scratch strokes, spinback |
+| `deck-core.js` | Turntable audio engine: variable-speed, reversible playback, motor inertia, scratch strokes, spinback |
+| `deck-worklet.js` | Runs the engine on the audio thread (AudioWorklet); `app.js` falls back to ScriptProcessor |
 | `app.js` | Decks, mixer, sync, automix, D-pad focus, library, gestures |
 | `music.js` | Apple Music + Audius catalogs |
 | `analyze.js` | Waveform peaks, BPM + beat-grid detection |

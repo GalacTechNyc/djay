@@ -200,7 +200,9 @@ export async function renderDemo(track, sampleRate = 44100) {
   const bars = 16;
   const sd = 60 / track.bpm / 4; // one 16th note
   const len = bars * 16 * sd;
-  const ctx = new OfflineAudioContext(2, Math.ceil(len * sampleRate), sampleRate);
+  const Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!Offline) throw new Error('Demo tracks need OfflineAudioContext, which this browser lacks');
+  const ctx = new Offline(2, Math.ceil(len * sampleRate), sampleRate);
 
   const comp = ctx.createDynamicsCompressor();
   comp.threshold.value = -10;
@@ -219,5 +221,9 @@ export async function renderDemo(track, sampleRate = 44100) {
       pattern(S, { s, bar, t, sd, root: track.root, semi, intro: bar < 2 });
     }
   }
-  return ctx.startRendering();
+  return new Promise((resolve, reject) => {
+    ctx.oncomplete = (e) => resolve(e.renderedBuffer);
+    const p = ctx.startRendering();
+    p?.then?.(resolve, reject);
+  });
 }

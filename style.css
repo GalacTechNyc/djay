@@ -150,3 +150,8 @@ canvas { display: block; width: 280px; height: 40px; }
 #libList > #search, #library > #search { display: none; }
 .search-row #search { display: block; }
 #libHint { height: 28px; margin-top: 6px; text-align: center; color: var(--dim); font-size: 16px; }
+
+.row.info { height: auto; min-height: 56px; padding: 6px 12px; }
+.row.info small { white-space: normal; }
+.row.info small.good { color: #4ade80; }
+.row.info small.bad { color: #ff6b6b; }
