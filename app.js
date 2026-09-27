@@ -16,7 +16,21 @@ const $ = (s) => document.querySelector(s);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLORS = ['#22d3ee', '#ff4fd8'];
 const TEMPO_RANGE = 0.16;
-const DRAG_MODE = document.documentElement.dataset.drag === '1'; // set in index.html
+const DRAG_MODE = document.documentElement.dataset.drag === '1'; // "Hand scratch" mode, set in index.html
+
+// Hand scratch: how far the record moves per pixel of arm movement.
+const SECONDS_PER_PX = 1 / 400;
+const SENS_LEVELS = [
+  ['Low', 0.5],
+  ['Medium', 1],
+  ['High', 2],
+];
+let sensIdx = 1;
+try {
+  const v = localStorage.getItem('djay.sens');
+  if (v !== null && SENS_LEVELS[+v]) sensIdx = +v;
+} catch {}
+const sensitivity = () => SENS_LEVELS[sensIdx][1];
 
 // ---------- state ----------
 
@@ -455,13 +469,16 @@ function release(d) {
   d.held = false;
   post(d, { type: 'hold', value: false });
   d.el.platter.classList.remove('held');
-  if (state.cut[d.i]) {
-    state.cut[d.i] = false;
-    applyXf(true);
-  }
 }
 
 function stroke(d, dir) {
+  if (DRAG_MODE) {
+    // Armed (not held) in hand mode: a swipe is a quick push, then let go.
+    clearTimeout(d.strokeTimer);
+    d.strokeTimer = setTimeout(() => {
+      if (!drag) release(d);
+    }, 350);
+  }
   post(d, { type: 'stroke', value: dir * 3 });
   d.el.platter.classList.remove('flick-l', 'flick-r');
   void d.el.platter.offsetWidth;
@@ -602,6 +619,7 @@ function frame(t) {
   requestAnimationFrame(frame);
   if (t - lastFrame < 32) return; // display runs at 30 Hz
   lastFrame = t;
+  if (motion.open) drawMotion();
   if (ctx) stepAutomix();
   for (const d of decks) {
     const pos = d.track ? estPos(d) : 0;
@@ -635,7 +653,7 @@ function renderHint() {
   const el = state.engaged || document.activeElement;
   let h = '';
   if (state.engaged?.dataset.kind === 'platter')
-    h = DRAG_MODE ? 'Drag or swipe to scratch · ▲ cut · ▼ spinback · tap = let go' : '◀ ▶ scratch · ▲ fader cut · ▼ spinback · tap = let go';
+    h = DRAG_MODE ? 'Pinch & move arm to scratch · ▲ cut · back = done' : '◀ ▶ scratch · ▲ fader cut · ▼ spinback · tap = let go';
   else if (state.engaged) h = el.dataset.param === 'tempo' ? '◀ ▶ ±1% · ▲ ▼ fine · tap = done' : '◀ ▶ adjust · tap = done';
   else h = el?.dataset?.hint || 'Swipe to move · tap to select';
   if (hintEl.textContent !== h) hintEl.textContent = h;
@@ -673,29 +691,44 @@ function moveFocus(key) {
   best?.focus();
 }
 
+// Engaging a control is also a history entry, so a history-based back
+// gesture releases it instead of leaving the app.
 function engage(el) {
-  state.engaged = el;
-  el.classList.add('engaged');
   if (el.dataset.kind === 'platter') {
     const d = decks[+el.dataset.deck];
-    if (!d.track) {
-      disengage();
-      return openLibrary(d.i);
-    }
-    grab(d);
+    if (!d.track) return openLibrary(d.i);
+    // Hand scratch mode "arms" the record; pinching is what touches it.
+    if (!DRAG_MODE) grab(d);
   }
+  state.engaged = el;
+  el.classList.add('engaged');
+  histPush();
 }
 
-function disengage(spin = false) {
+function disengage(spin = false, fromPop = false) {
   const el = state.engaged;
   if (!el) return;
-  el.classList.remove('engaged');
+  el.classList.remove('engaged', 'cut');
   state.engaged = null;
   if (el.dataset.kind === 'platter') {
     const d = decks[+el.dataset.deck];
     release(d);
+    if (state.cut[d.i]) {
+      state.cut[d.i] = false;
+      applyXf(true);
+    }
     if (spin) post(d, { type: 'spinback', value: 6 });
   }
+  if (!fromPop) histUnwind();
+}
+
+// Back from a key: skip it if the glasses already did a history back for
+// the same gesture.
+function backLater(fn) {
+  const pressedAt = performance.now();
+  setTimeout(() => {
+    if (lastPopAt < pressedAt - 50) fn();
+  }, 80);
 }
 
 function activate(el) {
@@ -750,10 +783,22 @@ async function buildHome() {
     { kind: 'folder', label: 'Netlabels · Electronic', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'electronic' }) },
     {
       kind: 'setting',
-      label: `Drag scratch: ${DRAG_MODE ? 'ON' : 'OFF'}`,
-      sub: 'Scratch by dragging on the band · app reloads',
+      icon: '✋',
+      label: 'Hand scratch',
+      sub: 'Pinch & move your arm to scratch · app reloads',
+      value: DRAG_MODE ? 'ON' : 'OFF',
+      on: DRAG_MODE,
       run: toggleDragMode,
     },
+    {
+      kind: 'setting',
+      icon: '🎚',
+      label: 'Scratch sensitivity',
+      sub: 'How far the record moves per arm movement',
+      value: SENS_LEVELS[sensIdx][0],
+      run: (row) => cycleSensitivity(row),
+    },
+    { kind: 'setting', icon: '〰', label: 'Hand motion test', sub: 'See your arm movement live, for tuning', run: openMotionTest },
     { kind: 'setting', label: 'Device check', sub: 'What audio features these glasses support', run: showDeviceCheck, icon: '🔧' },
     ...DEMOS.map((item) => ({ kind: 'track', item })),
   ];
@@ -795,7 +840,9 @@ window.addEventListener('popstate', () => {
     return;
   }
   histDepth = Math.max(0, histDepth - 1);
-  if (library.open) goBack(true);
+  if (motion.open) closeMotion();
+  else if (library.open) goBack(true);
+  else if (state.engaged) disengage(false, true);
 });
 
 // Back from a key or the Back row: go through history so both paths agree.
@@ -805,8 +852,9 @@ function userBack() {
 }
 
 function openLibrary(forDeck = null) {
-  disengage();
-  if (!library.open) histPush();
+  const reuse = !!state.engaged; // its history entry becomes the Library's
+  disengage(false, true);
+  if (!library.open && !reuse) histPush();
   library.open = true;
   library.forDeck = forDeck;
   libEl.hidden = false;
@@ -918,10 +966,10 @@ function rowHTML(row, i) {
   const sel = i === library.idx ? ' sel' : '';
   if (row.kind === 'search') return `<li class="row search-row${sel}" data-i="${i}"></li>`;
   if (row.kind === 'back') return `<li class="row back${sel}">${row.label}</li>`;
-  if (row.kind === 'setting')
-    return row.icon
-      ? `<li class="row folder${sel}"><span class="ico">${row.icon}</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="chev">›</span></li>`
-      : `<li class="row folder${sel}"><span class="ico">✋</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="badge${DRAG_MODE ? ' on' : ''}">${DRAG_MODE ? 'ON' : 'OFF'}</span></li>`;
+  if (row.kind === 'setting') {
+    const end = row.value ? `<span class="badge${row.on ? ' on' : ''}">${esc(row.value)}</span>` : '<span class="chev">›</span>';
+    return `<li class="row folder${sel}"><span class="ico">${row.icon}</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span>${end}</li>`;
+  }
   if (row.kind === 'info')
     return `<li class="row info${sel}"><span class="txt"><b>${esc(row.label)}</b><small class="${row.ok === false ? 'bad' : row.ok ? 'good' : ''}">${esc(row.value)}</small></span></li>`;
   if (row.kind === 'folder')
@@ -981,7 +1029,7 @@ function libraryKey(e) {
       e.preventDefault();
       if (row?.kind === 'back') return goBack();
       if (row?.kind === 'folder') return runFolder(row);
-      if (row?.kind === 'setting') return row.run();
+      if (row?.kind === 'setting') return row.run(row);
       if (row?.kind === 'track') {
         const d = library.forDeck != null ? decks[library.forDeck] : decks.find((x) => !x.playing) || decks[1];
         library.forDeck = d.i;
@@ -993,12 +1041,7 @@ function libraryKey(e) {
     case 'Backspace':
       if (inSearch && e.key === 'Backspace') return;
       e.preventDefault();
-      {
-        const pressedAt = performance.now();
-        setTimeout(() => {
-          if (lastPopAt < pressedAt - 50) userBack();
-        }, 80);
-      }
+      backLater(userBack);
   }
 }
 
@@ -1018,6 +1061,11 @@ document.addEventListener('keydown', (e) => {
       return;
     }
   }
+  if (motion.open) {
+    e.preventDefault();
+    if (['Escape', 'Backspace', 'Enter'].includes(e.key)) backLater(exitMotion);
+    return;
+  }
   if (library.open) return libraryKey(e);
   const k = e.key;
   const el = state.engaged;
@@ -1033,13 +1081,15 @@ document.addEventListener('keydown', (e) => {
         applyXf(true);
         el.classList.toggle('cut', state.cut[d.i]);
       } else if (k === 'ArrowDown') disengage(true);
-      else if (k === 'Enter' || k === 'Escape' || k === 'Backspace') disengage();
+      else if (k === 'Enter') disengage();
+      else if (k === 'Escape' || k === 'Backspace') backLater(() => disengage());
       return;
     }
     e.preventDefault();
     if (k === 'ArrowRight' || k === 'ArrowLeft') nudgeSlider(el, k === 'ArrowRight' ? 1 : -1, false);
     else if (k === 'ArrowUp' || k === 'ArrowDown') nudgeSlider(el, k === 'ArrowUp' ? 1 : -1, true);
-    else if (k === 'Enter' || k === 'Escape' || k === 'Backspace') disengage();
+    else if (k === 'Enter') disengage();
+    else if (k === 'Escape' || k === 'Backspace') backLater(() => disengage());
     return;
   }
 
@@ -1071,18 +1121,31 @@ function startScratch(e, d) {
   if (!d.track) return;
   e.preventDefault();
   d.el.platter.focus();
-  drag = { d, x: e.clientX, y: e.clientY, t: e.timeStamp, id: e.pointerId, keep: d.held, sx: e.clientX, sy: e.clientY, at: performance.now() };
+  const pos0 = estPos(d);
+  drag = { d, id: e.pointerId, x0: e.clientX, y0: e.clientY, pos0, axis: null, keep: d.held };
   try {
     e.target.setPointerCapture(e.pointerId);
   } catch {}
   grab(d);
+  post(d, { type: 'follow', value: pos0 });
+}
+
+// Hand on the record: the record's position follows the hand's position.
+function moveScratch(e) {
+  const dx = e.clientX - drag.x0;
+  const dy = e.clientY - drag.y0;
+  // Lock to the axis the hand first moves along, so a stroke can't flip.
+  if (!drag.axis && Math.hypot(dx, dy) > 12) drag.axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+  const disp = drag.axis === 'y' ? -dy : dx;
+  post(drag.d, { type: 'follow', value: drag.pos0 + disp * SECONDS_PER_PX * sensitivity() });
 }
 
 document.addEventListener('pointerdown', (e) => {
+  if (motion.open) return motionPointer(e);
   ensureAudio();
   if (DRAG_MODE) {
-    const grabbed = !library.open && state.engaged?.dataset.kind === 'platter';
-    if (grabbed) return startScratch(e, decks[+state.engaged.dataset.deck]);
+    const armed = !library.open && state.engaged?.dataset.kind === 'platter';
+    if (armed) return startScratch(e, decks[+state.engaged.dataset.deck]);
     gesture = { id: e.pointerId, x: e.clientX, y: e.clientY, at: performance.now() };
     return;
   }
@@ -1091,31 +1154,20 @@ document.addEventListener('pointerdown', (e) => {
 });
 
 document.addEventListener('pointermove', (e) => {
-  if (!drag || e.pointerId !== drag.id) return;
-  const dt = Math.max(1, e.timeStamp - drag.t);
-  const dx = e.clientX - drag.x;
-  const dy = e.clientY - drag.y;
-  const v = (Math.abs(dx) >= Math.abs(dy) ? dx : -dy) / dt;
-  post(drag.d, { type: 'drag', value: clamp(v * 1.2, -8, 8) });
-  Object.assign(drag, { x: e.clientX, y: e.clientY, t: e.timeStamp });
+  if (motion.open) return motionPointer(e);
+  if (drag && e.pointerId === drag.id) moveScratch(e);
 });
 
 function endPointer(e) {
+  if (motion.open) return motionPointer(e);
   if (drag && e.pointerId === drag.id) {
     const g = drag;
-    if (!g.keep) release(g.d);
-    else post(g.d, { type: 'drag', value: 0 });
     drag = null;
     lastDragEndAt = performance.now();
-    // In drag mode a quick, still touch on a grabbed record is a tap: let go.
-    const still = Math.hypot(e.clientX - g.sx, e.clientY - g.sy) < 20 && lastDragEndAt - g.at < 350;
-    if (DRAG_MODE && still && e.type === 'pointerup' && state.engaged?.dataset.kind === 'platter') {
-      setTimeout(() => {
-        if (lastRealKeyAt > g.at) return;
-        lastSynthAt = performance.now();
-        disengage();
-      }, 120);
-    }
+    // Hand off the vinyl: the record plays on. (A record grabbed with the
+    // keyboard outside hand mode stays held until released.)
+    if (g.keep && !DRAG_MODE) post(g.d, { type: 'hold', value: true });
+    else release(g.d);
   }
   if (gesture && e.pointerId === gesture.id && e.type === 'pointerup') {
     const g = gesture;
@@ -1139,6 +1191,103 @@ function endPointer(e) {
 document.addEventListener('pointerup', endPointer);
 document.addEventListener('pointercancel', endPointer);
 
+// ---------- hand motion test ----------
+// Meta says drag coordinates must be checked on real glasses, so this screen
+// shows the raw pointer stream: trail, event rate, and how far a scratch
+// would move the record.
+
+const motion = { open: false, pts: [], times: [], down: false, x0: 0, y0: 0, type: '', last: null, maxDisp: 0 };
+const motionEl = $('#motion');
+const motionCanvas = $('#motionCanvas');
+const motionStats = $('#motionStats');
+
+function openMotionTest() {
+  Object.assign(motion, { open: true, pts: [], times: [], down: false, type: '', last: null, maxDisp: 0 });
+  motionEl.hidden = false;
+  histPush();
+  drawMotion();
+}
+
+function closeMotion() {
+  motion.open = false;
+  motionEl.hidden = true;
+}
+
+function exitMotion() {
+  if (histDepth > 0) history.back(); // popstate closes it
+  else closeMotion();
+}
+
+function motionPointer(e) {
+  e.preventDefault();
+  const now = performance.now();
+  motion.type = e.pointerType || '?';
+  motion.last = { x: e.clientX, y: e.clientY };
+  if (e.type === 'pointerdown') {
+    Object.assign(motion, { down: true, x0: e.clientX, y0: e.clientY, pts: [], maxDisp: 0 });
+  }
+  if (e.type === 'pointermove' || e.type === 'pointerdown') {
+    motion.pts.push({ x: e.clientX, y: e.clientY, down: motion.down });
+    if (motion.pts.length > 400) motion.pts.shift();
+    motion.times.push(now);
+    if (motion.down) {
+      const dx = e.clientX - motion.x0;
+      const dy = e.clientY - motion.y0;
+      motion.maxDisp = Math.max(motion.maxDisp, Math.abs(dx), Math.abs(dy));
+    }
+  }
+  if (e.type === 'pointerup' || e.type === 'pointercancel') motion.down = false;
+}
+
+function drawMotion() {
+  if (!motion.open) return;
+  const g = motionCanvas.getContext('2d');
+  const W = motionCanvas.width;
+  const H = motionCanvas.height;
+  const sx = W / 600;
+  const sy = H / 600;
+  g.clearRect(0, 0, W, H);
+  g.strokeStyle = '#3a4150';
+  g.strokeRect(1, 1, W - 2, H - 2);
+  g.lineWidth = 3;
+  g.lineJoin = 'round';
+  let prev = null;
+  for (const p of motion.pts) {
+    if (prev) {
+      g.strokeStyle = p.down ? '#22d3ee' : '#ff4fd8';
+      g.beginPath();
+      g.moveTo(prev.x * sx, prev.y * sy);
+      g.lineTo(p.x * sx, p.y * sy);
+      g.stroke();
+    }
+    prev = p;
+  }
+  if (motion.last) {
+    g.fillStyle = motion.down ? '#ffd23f' : '#ffffff';
+    g.beginPath();
+    g.arc(motion.last.x * sx, motion.last.y * sy, 8, 0, Math.PI * 2);
+    g.fill();
+  }
+  const now = performance.now();
+  motion.times = motion.times.filter((t) => now - t < 1000);
+  const secs = motion.maxDisp * SECONDS_PER_PX * sensitivity();
+  motionStats.innerHTML = motion.last
+    ? `<b>${motion.times.length}</b> events/s · ${esc(motion.type)} · x ${Math.round(motion.last.x)}, y ${Math.round(motion.last.y)}<br>` +
+      `Biggest move this pinch: <b>${Math.round(motion.maxDisp)} px</b> → record moves <b>${secs.toFixed(2)} s</b> (${SENS_LEVELS[sensIdx][0]})`
+    : DRAG_MODE
+      ? 'Pinch and move your arm…'
+      : 'Turn on Hand scratch first (Library), then come back here.';
+}
+
+function cycleSensitivity(row) {
+  sensIdx = (sensIdx + 1) % SENS_LEVELS.length;
+  try {
+    localStorage.setItem('djay.sens', String(sensIdx));
+  } catch {}
+  row.value = SENS_LEVELS[sensIdx][0];
+  renderLibrary();
+}
+
 function toggleDragMode() {
   try {
     localStorage.setItem('djay.drag', DRAG_MODE ? '0' : '1');
@@ -1159,6 +1308,7 @@ document.addEventListener('drop', (e) => {
 });
 
 document.addEventListener('click', (e) => {
+  if (motion.open) return;
   if (DRAG_MODE && e.pointerType !== 'mouse') return;
   const el = e.target.closest?.('#app .focusable');
   if (el && e.detail) {
@@ -1180,7 +1330,7 @@ renderButtons();
 renderSliders();
 buildHome();
 $('[data-action="library"]').focus();
-if (DRAG_MODE) toast('Drag scratch ON — grab a record, then drag', 3000);
+if (DRAG_MODE) toast('Hand scratch ON — tap a record, then pinch & move your arm', 3500);
 requestAnimationFrame(frame);
 
-window.djay = { decks, state, library, input: () => ({ now: performance.now(), lastRealKeyAt, lastSynthAt, lastDragEndAt, drag: !!drag, gesture: !!gesture }) }; // handy for debugging in the console
+window.djay = { decks, state, library, input: () => ({ now: performance.now(), lastRealKeyAt, lastSynthAt, lastDragEndAt, drag: !!drag, gesture: !!gesture, histDepth }), motion }; // handy for debugging in the console

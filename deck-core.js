@@ -23,6 +23,8 @@ export class DeckCore {
     this.scratchVel = 0; // speed the hand is pushing the record
     this.strokeDecay = Math.exp(-1 / (0.09 * sampleRate));
     this.spinning = false; // free-spinning backwards (spinback effect)
+    this.follow = false; // hand-position scratching
+    this.target = 0;
 
     this.blocks = 0;
   }
@@ -56,17 +58,27 @@ export class DeckCore {
         this.held = m.value;
         this.scratchVel = 0;
         this.spinning = false;
+        this.follow = false;
         break;
       case 'stroke':
         // A discrete swipe: shove the record, then friction brings it to rest.
         this.held = true;
         this.spinning = false;
+        this.follow = false;
         this.scratchVel = m.value;
         break;
       case 'drag':
         // Continuous drag: hand speed set directly.
         this.held = true;
+        this.follow = false;
         this.scratchVel = m.value;
+        break;
+      case 'follow':
+        // Hand on the record: chase the hand's position (seconds into the track).
+        this.held = true;
+        this.spinning = false;
+        this.follow = true;
+        this.target = m.value * this.bufRate;
         break;
       case 'spinback':
         this.held = false;
@@ -90,7 +102,19 @@ export class DeckCore {
     let ended = false;
 
     for (let i = 0; i < n; i++) {
-      if (this.held) {
+      if (this.held && this.follow) {
+        // Speed proportional to how far the record lags the hand (closes the
+        // gap in ~20 ms), so the record stops when the hand stops.
+        let gap = this.target - this.pos;
+        if (this.loop) {
+          if (gap > len / 2) gap -= len;
+          else if (gap < -len / 2) gap += len;
+        }
+        let want = gap / (this.bufRate * 0.02);
+        if (want > 12) want = 12;
+        else if (want < -12) want = -12;
+        this.rate += (want - this.rate) * 0.05;
+      } else if (this.held) {
         this.rate += (this.scratchVel - this.rate) * 0.02;
         this.scratchVel *= this.strokeDecay;
       } else if (this.spinning) {
