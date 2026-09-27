@@ -22,6 +22,10 @@ const SECONDS_PER_PX = 1 / 400;
 // Volume/scroll signals that might come from the band's pinch-and-twist.
 // While a record is grabbed they scratch instead of changing volume.
 const TWIST_KEYS = { AudioVolumeUp: 1, VolumeUp: 1, AudioVolumeDown: -1, VolumeDown: -1 };
+// Raw key numbers for volume up/down: Android (24/25) and Windows (175/174).
+const TWIST_KEYCODES = { 24: 1, 175: 1, 25: -1, 174: -1 };
+// The glasses send the twist as key "Unidentified", so fall back to keyCode.
+const twistDir = (e) => TWIST_KEYS[e.key] ?? (e.key === 'Unidentified' || !e.key ? TWIST_KEYCODES[e.keyCode] : undefined);
 
 // Clean up settings from the removed Hand scratch mode.
 try {
@@ -1023,18 +1027,19 @@ searchInput.addEventListener('search', () => runSearch(searchInput.value));
 
 document.addEventListener('keydown', (e) => {
   if (inputTest.open) {
-    logInput('key', `${e.key}${e.code && e.code !== e.key ? ` (${e.code})` : ''}${e.repeat ? ' repeat' : ''}`);
+    logKey(e);
     if (e.key === 'Escape' || e.key === 'Backspace') {
       e.preventDefault();
       backLater(exitInputTest);
-    } else if (!(e.key in TWIST_KEYS)) e.preventDefault();
+    } else if (twistDir(e) === undefined) e.preventDefault();
     return;
   }
-  // Pinch-and-twist, if it reaches the app as volume keys: scratch the
-  // grabbed record instead of changing the volume.
-  if (e.key in TWIST_KEYS && state.engaged?.dataset.kind === 'platter') {
+  // Pinch-and-twist arrives as volume keys: scratch the grabbed record
+  // instead of changing the volume.
+  const twist = twistDir(e);
+  if (twist !== undefined && state.engaged?.dataset.kind === 'platter') {
     e.preventDefault();
-    stroke(decks[+state.engaged.dataset.deck], TWIST_KEYS[e.key], 2);
+    stroke(decks[+state.engaged.dataset.deck], twist, 2);
     return;
   }
   if (library.open) return libraryKey(e);
@@ -1176,6 +1181,17 @@ function logInput(kind, detail) {
   inputLog.prepend(li);
   while (inputLog.children.length > 12) inputLog.lastChild.remove();
 }
+
+function logKey(e) {
+  const parts = [`keyCode ${e.keyCode}`];
+  if (e.code) parts.push(`code ${e.code}`);
+  if (e.location) parts.push(`loc ${e.location}`);
+  if (e.repeat) parts.push('repeat');
+  logInput(e.type === 'keyup' ? 'key up' : 'key', `${e.key || '(none)'} · ${parts.join(' · ')}`);
+}
+document.addEventListener('keyup', (e) => {
+  if (inputTest.open) logKey(e);
+});
 
 function logPointer(e) {
   if (e.type === 'pointermove') {
