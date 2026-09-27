@@ -26,6 +26,19 @@ const TWIST_KEYS = { AudioVolumeUp: 1, VolumeUp: 1, AudioVolumeDown: -1, VolumeD
 const TWIST_KEYCODES = { 24: 1, 175: 1, 25: -1, 174: -1 };
 // The glasses send the twist as key "Unidentified", so fall back to keyCode.
 const twistDir = (e) => TWIST_KEYS[e.key] ?? (e.key === 'Unidentified' || !e.key ? TWIST_KEYCODES[e.keyCode] : undefined);
+// On Meta Ray-Ban Display the twist arrives as "Unidentified" with keyCode 0
+// in both directions, so direction can't be read. Instead, each burst of
+// twisting pushes the record one way and the next burst (after a pause)
+// pulls it back: twist, pause, twist = forward, back — a baby scratch.
+const isBlindTwist = (e) => (e.key === 'Unidentified' || !e.key) && !e.keyCode;
+const TWIST_BURST_GAP = 180; // ms of quiet that ends a burst
+let twistBurst = { dir: -1, last: -Infinity };
+function twistTick(d) {
+  const now = performance.now();
+  if (now - twistBurst.last > TWIST_BURST_GAP) twistBurst.dir = -twistBurst.dir;
+  twistBurst.last = now;
+  stroke(d, twistBurst.dir, 2);
+}
 
 // Clean up settings from the removed Hand scratch mode.
 try {
@@ -461,6 +474,7 @@ function nextTrack(current) {
 // ---------- scratching ----------
 
 function grab(d) {
+  twistBurst = { dir: -1, last: -Infinity };
   d.held = true;
   post(d, { type: 'hold', value: true });
   d.el.platter.classList.add('held');
@@ -1037,9 +1051,11 @@ document.addEventListener('keydown', (e) => {
   // Pinch-and-twist arrives as volume keys: scratch the grabbed record
   // instead of changing the volume.
   const twist = twistDir(e);
-  if (twist !== undefined && state.engaged?.dataset.kind === 'platter') {
+  if (state.engaged?.dataset.kind === 'platter' && (twist !== undefined || isBlindTwist(e))) {
     e.preventDefault();
-    stroke(decks[+state.engaged.dataset.deck], twist, 2);
+    const d = decks[+state.engaged.dataset.deck];
+    if (twist !== undefined) stroke(d, twist, 2);
+    else twistTick(d);
     return;
   }
   if (library.open) return libraryKey(e);

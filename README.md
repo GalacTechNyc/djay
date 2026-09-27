@@ -31,10 +31,13 @@ To practice a baby scratch: grab the platter, then swipe right, left, right, lef
 
 ### Twist scratch (experimental)
 
-Idea: use the band's pinch-and-twist (volume) gesture to scratch. Meta's docs don't say whether web apps receive that gesture, so:
+Grab a record (tap the platter), then use the band's **pinch-and-twist** (volume) gesture:
 
-- While a record is grabbed, **volume keys** (`AudioVolumeUp` / `AudioVolumeDown`) and **scroll/wheel** events scratch it forward and back instead of changing the volume.
-- **Library → Input test** lists every signal the glasses send. Open it and do the pinch-and-twist to see whether (and how) it arrives. If it shows up as something else, that can be mapped to scratching too.
+- On Meta Ray-Ban Display the twist reaches web apps as key `Unidentified` with keyCode 0 **in both directions**, so the app can't tell which way you twisted.
+- So each **burst** of twisting pushes the record one way, and the next burst (after a pause of about 0.2 s) pulls it back. Twist, pause, twist, pause = forward, back, forward, back: a baby scratch in the rhythm of your wrist.
+- If a device does report direction (volume keys, keyCodes 24/25 or 175/174, or scroll/wheel), that direction is used instead.
+
+**Library → Input test** lists every signal the glasses send (key names, keyCodes, key-ups, wheel and pointer events).
 
 (An earlier arm-tracking "Hand scratch" mode was removed because the band's pinch arrived as several overlapping signals.)
 
