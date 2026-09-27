@@ -184,7 +184,14 @@ function makeScriptDeck() {
   return node;
 }
 
-const post = (d, msg, transfer) => d.node?.port.postMessage(msg, transfer || []);
+const post = (d, msg, transfer) => {
+  // Keep our position estimate in step immediately; the engine confirms ~16 ms later.
+  if (msg.type === 'seek') {
+    d.pos = msg.value;
+    d.posAt = performance.now();
+  }
+  d.node?.port.postMessage(msg, transfer || []);
+};
 
 function onDeckMessage(d, m) {
   if (m.type === 'pos') {
@@ -557,7 +564,12 @@ function beatJump(d, dir) {
     d.loopStart = Math.max(0, d.loopStart + dist);
     setLoop(d);
   }
-  jumpTo(d, estPos(d) + dist);
+  // Already a whole number of beats, so no quantize rounding (that could
+  // land a beat short when mid-beat).
+  let t = estPos(d) + dist;
+  if (d.track.loop) t = ((t % d.duration) + d.duration) % d.duration; // looping demos wrap
+  else while (t < 0) t += beatSecs(d); // near the start: earliest spot still on the beat
+  post(d, { type: 'seek', value: t });
   toast(`${d.name}: jump ${dir > 0 ? '+' : '−'}${Math.max(1, d.loopSize)} beats`);
 }
 
