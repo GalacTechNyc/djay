@@ -39,7 +39,7 @@ Meta's web apps get the Neural Band's **continuous arm movement** as pointer eve
 4. **Let go** and the record plays on. Scratch again whenever you like.
 5. Swipe ▲ toggles the crossfader cut. **Back** disarms the record.
 
-**Scratch sensitivity** (Low / Medium / High) sets how far the record moves per arm movement. **Hand motion test** shows the raw arm tracking live (path, events per second, and how far a scratch would move the record), which is useful for tuning on real glasses. While Hand scratch is on, quick flicks and taps also work as swipes and presses, so you can always navigate back to the setting. `?drag=1` / `?drag=0` in the URL forces it on or off.
+**Scratch sensitivity** (Low / Medium / High) sets how far the record moves per arm movement. **Hand motion test** shows the raw arm tracking live (path, events per second, and how far a scratch would move the record), which is useful for tuning on real glasses. While Hand scratch is on, quick flicks and taps also work as swipes and presses, so you can always navigate back to the setting. Turning it off takes effect immediately (no reload), and your choice in the app wins over a `?drag=1` address. `?drag=0` in the URL always forces it off.
 
 ## Music sources
 

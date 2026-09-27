@@ -12,17 +12,18 @@
   <link rel="manifest" href="manifest.json">
   <link rel="stylesheet" href="style.css">
   <script>
-    // Drag scratching needs touch-action:none in the *initial* stylesheet
-    // (Meta's rule), so the in-app toggle saves the choice and reloads.
-    // ?drag=1 / ?drag=0 overrides it.
+    // Hand scratch needs touch-action:none in the *initial* stylesheet
+    // (Meta's rule), so turning it ON saves the choice and reloads. The
+    // choice made in the app wins over ?drag=1; ?drag=0 always turns it off.
     (function () {
-      var on = false;
-      try { on = localStorage.getItem('djay.drag') === '1'; } catch (e) {}
+      var saved = null;
+      try { saved = localStorage.getItem('djay.drag'); } catch (e) {}
       var m = location.search.match(/[?&]drag=([01])/);
-      if (m) on = m[1] === '1';
+      var on = saved !== null ? saved === '1' : !!(m && m[1] === '1');
+      if (m && m[1] === '0') on = false;
       if (on) {
         document.documentElement.dataset.drag = '1';
-        document.write('<style>body{touch-action:none}</style>');
+        document.write('<style id="dragStyle">body{touch-action:none}</style>');
       }
     })();
   </script>

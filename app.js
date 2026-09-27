@@ -16,7 +16,11 @@ const $ = (s) => document.querySelector(s);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLORS = ['#22d3ee', '#ff4fd8'];
 const TEMPO_RANGE = 0.16;
-const DRAG_MODE = document.documentElement.dataset.drag === '1'; // "Hand scratch" mode, set in index.html
+// "Hand scratch" mode. Set in index.html at load; can be switched off live.
+let DRAG_MODE = document.documentElement.dataset.drag === '1';
+// The band's pointer stream stays on until reload even after switching off,
+// so its (touch) pointers are ignored rather than treated as screen touches.
+const BAND_POINTERS = DRAG_MODE;
 
 // Hand scratch: how far the record moves per pixel of arm movement.
 const SECONDS_PER_PX = 1 / 400;
@@ -1159,6 +1163,7 @@ document.addEventListener('pointerdown', (e) => {
     gesture = { id: e.pointerId, x: e.clientX, y: e.clientY, at: performance.now() };
     return;
   }
+  if (BAND_POINTERS && e.pointerType !== 'mouse') return;
   const plat = e.target.closest?.('.platter');
   if (plat && !library.open) startScratch(e, decks[+plat.dataset.deck]);
 });
@@ -1300,13 +1305,32 @@ function cycleSensitivity(row) {
   renderLibrary();
 }
 
-function toggleDragMode() {
+function toggleDragMode(row) {
+  const on = !DRAG_MODE;
   try {
-    localStorage.setItem('djay.drag', DRAG_MODE ? '0' : '1');
+    localStorage.setItem('djay.drag', on ? '1' : '0');
   } catch {}
+  if (!on) {
+    // Off takes effect immediately; no reload needed.
+    disengage();
+    drag = null;
+    gesture = null;
+    DRAG_MODE = false;
+    document.getElementById('dragStyle')?.remove();
+    document.documentElement.dataset.drag = '0';
+    if (row) {
+      row.value = 'OFF';
+      row.on = false;
+    }
+    renderLibrary();
+    toast('Hand scratch off');
+    return;
+  }
+  // On needs a fresh page load (Meta's rule for arm tracking).
+  toast('Turning on Hand scratch…');
   const url = new URL(location.href);
   url.searchParams.delete('drag');
-  location.replace(url);
+  setTimeout(() => location.replace(url), 300);
 }
 
 // Desktop convenience: drop an audio file on the left/right half to load it.
@@ -1321,7 +1345,7 @@ document.addEventListener('drop', (e) => {
 
 document.addEventListener('click', (e) => {
   if (motion.open) return;
-  if (DRAG_MODE && e.pointerType !== 'mouse') return;
+  if (BAND_POINTERS && e.pointerType !== 'mouse') return;
   const el = e.target.closest?.('#app .focusable');
   if (el && e.detail) {
     el.focus();
