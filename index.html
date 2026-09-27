@@ -9,11 +9,19 @@
   <link rel="icon" type="image/png" href="icon.png">
   <link rel="stylesheet" href="style.css">
   <script>
-    // Continuous Neural Band drag → pointer events. Must be in the initial
-    // stylesheet, so it's opt-in via ?drag=1 (swipes still work without it).
-    if (/[?&]drag=1/.test(location.search)) {
-      document.write('<style>body{touch-action:none}</style>');
-    }
+    // Drag scratching needs touch-action:none in the *initial* stylesheet
+    // (Meta's rule), so the in-app toggle saves the choice and reloads.
+    // ?drag=1 / ?drag=0 overrides it.
+    (function () {
+      var on = false;
+      try { on = localStorage.getItem('djay.drag') === '1'; } catch (e) {}
+      var m = location.search.match(/[?&]drag=([01])/);
+      if (m) on = m[1] === '1';
+      if (on) {
+        document.documentElement.dataset.drag = '1';
+        document.write('<style>body{touch-action:none}</style>');
+      }
+    })();
   </script>
 </head>
 <body>

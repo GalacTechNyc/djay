@@ -22,13 +22,14 @@ No build step. Plain HTML/CSS/JS, about 60 KB in total.
 | Grabbed platter | Swipe ▲ | Toggle crossfader cut (transformer) |
 | Grabbed platter | Swipe ▼ | Let go with a spinback |
 | Grabbed platter | Tap | Let go (the record plays on) |
+| Grabbed platter (drag mode) | Drag ◀ ▶ | Scratch at your hand's speed |
 | Slider | Tap, then ◀ ▶ | Adjust (▲ ▼ = fine tempo), tap again when done |
 | Library track | ◀ / ▶ | Load onto deck A / B |
 | Library | Tap search row | Opens the glasses keyboard |
 
 To practice a baby scratch: grab the platter, then swipe right, left, right, left in time with the beat on the "ahh" vocal in the demo tracks.
 
-**Continuous drag scratching:** open the app with `?drag=1` and the band's drag gesture scratches smoothly with your hand speed. It's opt-in because Meta says drag mode must be switched on in the page's first stylesheet, and it hasn't been tested on hardware yet.
+**Drag scratch toggle:** in the Library, turn on **Drag scratch**. The app reloads, and after that, dragging on a grabbed record scratches at your hand's speed. A tap lets go. The app has to reload because Meta only turns on the band's drag input if it's switched on when the page first loads. While drag mode is on, the app also reads quick flicks and taps as swipes and presses, so you can always get back to the toggle. You can also force it with `?drag=1` or `?drag=0` in the URL.
 
 ## Music sources
 

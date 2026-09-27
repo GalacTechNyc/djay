@@ -139,6 +139,7 @@ canvas { display: block; width: 280px; height: 40px; }
 .row b { font-size: 18px; }
 .row small { font-size: 16px; color: var(--dim); }
 .row .badge { font-size: 14px; font-weight: 700; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--dim); color: var(--dim); }
+.row .badge.on { color: var(--hot); border-color: var(--hot); }
 .row .chev { font-size: 28px; color: var(--dim); }
 .row.back { font-size: 18px; color: var(--dim); }
 #search {

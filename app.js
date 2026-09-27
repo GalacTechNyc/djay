@@ -6,6 +6,7 @@ const $ = (s) => document.querySelector(s);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLORS = ['#22d3ee', '#ff4fd8'];
 const TEMPO_RANGE = 0.16;
+const DRAG_MODE = document.documentElement.dataset.drag === '1'; // set in index.html
 
 // ---------- state ----------
 
@@ -514,7 +515,8 @@ function renderHint() {
   hintEl.classList.remove('toast');
   const el = state.engaged || document.activeElement;
   let h = '';
-  if (state.engaged?.dataset.kind === 'platter') h = '◀ ▶ scratch · ▲ fader cut · ▼ spinback · tap = let go';
+  if (state.engaged?.dataset.kind === 'platter')
+    h = DRAG_MODE ? 'Drag or swipe to scratch · ▲ cut · ▼ spinback · tap = let go' : '◀ ▶ scratch · ▲ fader cut · ▼ spinback · tap = let go';
   else if (state.engaged) h = el.dataset.param === 'tempo' ? '◀ ▶ ±1% · ▲ ▼ fine · tap = done' : '◀ ▶ adjust · tap = done';
   else h = el?.dataset?.hint || 'Swipe to move · tap to select';
   if (hintEl.textContent !== h) hintEl.textContent = h;
@@ -619,6 +621,12 @@ async function buildHome() {
     { kind: 'folder', label: 'Audius · Trending', sub: 'Full tracks', load: () => audiusTrending() },
     { kind: 'folder', label: 'Audius · Hip-Hop', sub: 'Full tracks', load: () => audiusTrending('Hip-Hop/Rap') },
     { kind: 'folder', label: 'Audius · Electronic', sub: 'Full tracks', load: () => audiusTrending('Electronic') },
+    {
+      kind: 'setting',
+      label: `Drag scratch: ${DRAG_MODE ? 'ON' : 'OFF'}`,
+      sub: 'Scratch by dragging on the band · app reloads',
+      run: toggleDragMode,
+    },
     ...DEMOS.map((item) => ({ kind: 'track', item })),
   ];
   library.home = rows;
@@ -687,6 +695,8 @@ function rowHTML(row, i) {
   const sel = i === library.idx ? ' sel' : '';
   if (row.kind === 'search') return `<li class="row search-row${sel}" data-i="${i}"></li>`;
   if (row.kind === 'back') return `<li class="row back${sel}">${row.label}</li>`;
+  if (row.kind === 'setting')
+    return `<li class="row folder${sel}"><span class="ico">✋</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="badge${DRAG_MODE ? ' on' : ''}">${DRAG_MODE ? 'ON' : 'OFF'}</span></li>`;
   if (row.kind === 'folder')
     return `<li class="row folder${sel}"><span class="ico">♫</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="chev">›</span></li>`;
   const t = row.item;
@@ -744,6 +754,7 @@ function libraryKey(e) {
       e.preventDefault();
       if (row?.kind === 'back') return goHome();
       if (row?.kind === 'folder') return runFolder(row);
+      if (row?.kind === 'setting') return row.run();
       if (row?.kind === 'track') {
         const d = library.forDeck != null ? decks[library.forDeck] : decks.find((x) => !x.playing) || decks[1];
         library.forDeck = d.i;
@@ -766,6 +777,16 @@ searchInput.addEventListener('search', () => runSearch(searchInput.value));
 // ---------- input ----------
 
 document.addEventListener('keydown', (e) => {
+  if (e.isTrusted) {
+    const now = performance.now();
+    lastRealKeyAt = now;
+    // Drop a real key that duplicates a gesture we already turned into a key,
+    // or arrows that echo a drag-scratch.
+    if (now - lastSynthAt < 300 || (drag && e.key.startsWith('Arrow')) || now - lastDragEndAt < 200) {
+      e.preventDefault();
+      return;
+    }
+  }
   if (library.open) return libraryKey(e);
   const k = e.key;
   const el = state.engaged;
@@ -803,25 +824,41 @@ document.addEventListener('keydown', (e) => {
   // Escape at the top level is left alone so the glasses can close the app.
 });
 
-// Continuous drag scratching (mouse on desktop, band drag on glasses with ?drag=1).
+// ---------- drag scratching ----------
+// Desktop/touch: drag a platter directly. Glasses in drag mode: the band's
+// drag arrives as pointer events. A drag on a grabbed record scratches;
+// otherwise short flicks and taps are read as swipes and pinches, so the app
+// stays navigable even if drag mode stops the arrow keys from coming through.
+
 let drag = null;
-document.addEventListener('pointerdown', (e) => {
-  if (library.open) return;
-  ensureAudio();
-  const plat = e.target.closest?.('.platter');
-  if (!plat && e.pointerType === 'mouse') return;
-  const target = plat || (state.engaged?.dataset.kind === 'platter' ? state.engaged : null) || document.activeElement?.closest?.('.platter');
-  if (!target) return;
-  const d = decks[+target.dataset.deck];
+let gesture = null;
+let lastRealKeyAt = 0;
+let lastSynthAt = 0;
+let lastDragEndAt = 0;
+
+function startScratch(e, d) {
   if (!d.track) return;
   e.preventDefault();
-  target.focus();
-  drag = { d, x: e.clientX, y: e.clientY, t: e.timeStamp, id: e.pointerId, keep: d.held };
+  d.el.platter.focus();
+  drag = { d, x: e.clientX, y: e.clientY, t: e.timeStamp, id: e.pointerId, keep: d.held, sx: e.clientX, sy: e.clientY, at: performance.now() };
   try {
     e.target.setPointerCapture(e.pointerId);
   } catch {}
   grab(d);
+}
+
+document.addEventListener('pointerdown', (e) => {
+  ensureAudio();
+  if (DRAG_MODE) {
+    const grabbed = !library.open && state.engaged?.dataset.kind === 'platter';
+    if (grabbed) return startScratch(e, decks[+state.engaged.dataset.deck]);
+    gesture = { id: e.pointerId, x: e.clientX, y: e.clientY, at: performance.now() };
+    return;
+  }
+  const plat = e.target.closest?.('.platter');
+  if (plat && !library.open) startScratch(e, decks[+plat.dataset.deck]);
 });
+
 document.addEventListener('pointermove', (e) => {
   if (!drag || e.pointerId !== drag.id) return;
   const dt = Math.max(1, e.timeStamp - drag.t);
@@ -831,14 +868,54 @@ document.addEventListener('pointermove', (e) => {
   post(drag.d, { type: 'drag', value: clamp(v * 1.2, -8, 8) });
   Object.assign(drag, { x: e.clientX, y: e.clientY, t: e.timeStamp });
 });
-const endDrag = (e) => {
-  if (!drag || e.pointerId !== drag.id) return;
-  if (!drag.keep) release(drag.d);
-  else post(drag.d, { type: 'drag', value: 0 });
-  drag = null;
-};
-document.addEventListener('pointerup', endDrag);
-document.addEventListener('pointercancel', endDrag);
+
+function endPointer(e) {
+  if (drag && e.pointerId === drag.id) {
+    const g = drag;
+    if (!g.keep) release(g.d);
+    else post(g.d, { type: 'drag', value: 0 });
+    drag = null;
+    lastDragEndAt = performance.now();
+    // In drag mode a quick, still touch on a grabbed record is a tap: let go.
+    const still = Math.hypot(e.clientX - g.sx, e.clientY - g.sy) < 20 && lastDragEndAt - g.at < 350;
+    if (DRAG_MODE && still && e.type === 'pointerup' && state.engaged?.dataset.kind === 'platter') {
+      setTimeout(() => {
+        if (lastRealKeyAt > g.at) return;
+        lastSynthAt = performance.now();
+        disengage();
+      }, 120);
+    }
+  }
+  if (gesture && e.pointerId === gesture.id && e.type === 'pointerup') {
+    const g = gesture;
+    const dx = e.clientX - g.x;
+    const dy = e.clientY - g.y;
+    const key =
+      Math.hypot(dx, dy) < 20
+        ? 'Enter'
+        : Math.abs(dx) >= Math.abs(dy)
+          ? dx > 0 ? 'ArrowRight' : 'ArrowLeft'
+          : dy > 0 ? 'ArrowDown' : 'ArrowUp';
+    // If the glasses also sent a real key for this gesture, let that win.
+    setTimeout(() => {
+      if (lastRealKeyAt > g.at) return;
+      lastSynthAt = performance.now();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+    }, 120);
+  }
+  if (gesture && e.pointerId === gesture.id) gesture = null;
+}
+document.addEventListener('pointerup', endPointer);
+document.addEventListener('pointercancel', endPointer);
+
+function toggleDragMode() {
+  try {
+    localStorage.setItem('djay.drag', DRAG_MODE ? '0' : '1');
+  } catch {}
+  const url = new URL(location.href);
+  url.searchParams.delete('drag');
+  location.replace(url);
+}
 
 // Desktop convenience: drop an audio file on the left/right half to load it.
 document.addEventListener('dragover', (e) => e.preventDefault());
@@ -851,6 +928,7 @@ document.addEventListener('drop', (e) => {
 });
 
 document.addEventListener('click', (e) => {
+  if (DRAG_MODE && e.pointerType !== 'mouse') return;
   const el = e.target.closest?.('#app .focusable');
   if (el && e.detail) {
     el.focus();
@@ -871,6 +949,7 @@ renderButtons();
 renderSliders();
 buildHome();
 $('[data-action="library"]').focus();
+if (DRAG_MODE) toast('Drag scratch ON — grab a record, then drag', 3000);
 requestAnimationFrame(frame);
 
 window.djay = { decks, state, library }; // handy for debugging in the console
