@@ -111,8 +111,19 @@ async function initAudio() {
   limiter.release.value = 0.1;
   master = ctx.createGain();
   master.gain.value = 0.9;
+  // Soft clipper after the limiter: peaks that slip past it are rounded off
+  // instead of hard-clipping into crackles.
+  const soft = ctx.createWaveShaper();
+  const curve = new Float32Array(2048);
+  for (let i = 0; i < curve.length; i++) {
+    const x = (i / (curve.length - 1)) * 2 - 1;
+    curve[i] = Math.abs(x) < 0.8 ? x : Math.sign(x) * (0.8 + 0.2 * Math.tanh((Math.abs(x) - 0.8) / 0.2));
+  }
+  soft.curve = curve;
+  soft.oversample = '2x';
   master.connect(limiter);
-  limiter.connect(ctx.destination);
+  limiter.connect(soft);
+  soft.connect(ctx.destination);
   for (const d of decks) {
     d.node = useWorklet ? makeWorkletDeck() : makeScriptDeck();
     d.filter = ctx.createBiquadFilter();
@@ -179,11 +190,12 @@ function applyFilter(d) {
   }
 }
 
-// Both decks at full volume in the middle, fading out toward the far side.
+// Constant-power crossfade: each deck is at ~70% in the middle, so a blend is
+// as loud as a single track (full + full would jump ~3–6 dB and clip).
 function applyXf(instant = false) {
   if (!ctx) return;
   const x = state.xf;
-  const g = [x <= 0.5 ? 1 : Math.cos((x - 0.5) * Math.PI), x >= 0.5 ? 1 : Math.cos((0.5 - x) * Math.PI)];
+  const g = [Math.cos((x * Math.PI) / 2), Math.sin((x * Math.PI) / 2)];
   decks.forEach((d, i) => {
     const v = state.cut[i] ? 0 : g[i];
     d.xfGain.gain.setTargetAtTime(v, ctx.currentTime, instant ? 0.003 : 0.015);
