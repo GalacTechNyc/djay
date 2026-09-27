@@ -364,6 +364,7 @@ function jumpTo(d, t) {
     const beat = 60 / d.bpm;
     const within = (((estPos(d) - d.offset) % beat) + beat) % beat;
     t = snapToBeat(d, t) + within;
+    while (t < 0) t += beat;
   }
   post(d, { type: 'seek', value: Math.max(0, t) });
 }
@@ -407,7 +408,10 @@ function alignPhase(d, lead) {
   let target = d.offset + (Math.floor((pos - d.offset) / bd) + phase) * bd;
   if (target - pos > bd / 2) target -= bd;
   if (pos - target > bd / 2) target += bd;
-  post(d, { type: 'seek', value: Math.max(0, target) });
+  // At the very start of a track the matching spot can fall before 0:00;
+  // go one beat later instead of clamping (clamping lands off the beat).
+  while (target < 0) target += bd;
+  post(d, { type: 'seek', value: target });
 }
 
 // Slip: scratch, spin back or hold the record while the track keeps running
