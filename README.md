@@ -22,24 +22,21 @@ No build step. Plain HTML/CSS/JS, about 60 KB in total.
 | Grabbed platter | Swipe ▲ | Toggle crossfader cut (transformer) |
 | Grabbed platter | Swipe ▼ | Let go with a spinback |
 | Grabbed platter | Tap | Let go (the record plays on) |
-| Armed platter (Hand scratch) | Pinch + move arm | Scratch: the record follows your hand |
+| Grabbed platter | Pinch-and-twist (if the glasses pass it on) | Scratch forward / back |
 | Slider | Tap, then ◀ ▶ | Adjust (▲ ▼ = fine tempo), tap again when done |
 | Library track | ◀ / ▶ | Load onto deck A / B |
 | Library | Tap search row | Opens the glasses keyboard |
 
 To practice a baby scratch: grab the platter, then swipe right, left, right, left in time with the beat on the "ahh" vocal in the demo tracks.
 
-### Hand scratch (real arm motion)
+### Twist scratch (experimental)
 
-Meta's web apps get the Neural Band's **continuous arm movement** as pointer events. (Handwriting and raw band sensors aren't available to apps; handwriting only comes back as finished text from Meta's composer.) Hand scratch mode uses that arm movement like a real turntable:
+Idea: use the band's pinch-and-twist (volume) gesture to scratch. Meta's docs don't say whether web apps receive that gesture, so:
 
-1. Library → **Hand scratch: ON**. The app reloads, because Meta only turns on arm tracking when the page first loads.
-2. Tap a platter to **arm** it. The record keeps playing.
-3. **Pinch and hold** = hand on the vinyl. **Move your arm** and the record follows your hand's position, so a slow move gives a slow scratch and a stopped hand stops the record.
-4. **Let go** and the record plays on. Scratch again whenever you like.
-5. Swipe ▲ toggles the crossfader cut. **Back** disarms the record.
+- While a record is grabbed, **volume keys** (`AudioVolumeUp` / `AudioVolumeDown`) and **scroll/wheel** events scratch it forward and back instead of changing the volume.
+- **Library → Input test** lists every signal the glasses send. Open it and do the pinch-and-twist to see whether (and how) it arrives. If it shows up as something else, that can be mapped to scratching too.
 
-**Scratch sensitivity** (Low / Medium / High) sets how far the record moves per arm movement. **Hand motion test** shows the raw arm tracking live (path, events per second, and how far a scratch would move the record), which is useful for tuning on real glasses. While Hand scratch is on, quick flicks and taps also work as swipes and presses, so you can always navigate back to the setting. Turning it off takes effect immediately (no reload), and your choice in the app wins over a `?drag=1` address. `?drag=0` in the URL always forces it off.
+(An earlier arm-tracking "Hand scratch" mode was removed because the band's pinch arrived as several overlapping signals.)
 
 ## Music sources
 

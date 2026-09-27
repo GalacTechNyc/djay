@@ -16,25 +16,18 @@ const $ = (s) => document.querySelector(s);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const COLORS = ['#22d3ee', '#ff4fd8'];
 const TEMPO_RANGE = 0.16;
-// "Hand scratch" mode. Set in index.html at load; can be switched off live.
-let DRAG_MODE = document.documentElement.dataset.drag === '1';
-// The band's pointer stream stays on until reload even after switching off,
-// so its (touch) pointers are ignored rather than treated as screen touches.
-const BAND_POINTERS = DRAG_MODE;
-
-// Hand scratch: how far the record moves per pixel of arm movement.
+// Mouse/touch platter dragging: how far the record moves per pixel.
 const SECONDS_PER_PX = 1 / 400;
-const SENS_LEVELS = [
-  ['Low', 0.5],
-  ['Medium', 1],
-  ['High', 2],
-];
-let sensIdx = 1;
+
+// Volume/scroll signals that might come from the band's pinch-and-twist.
+// While a record is grabbed they scratch instead of changing volume.
+const TWIST_KEYS = { AudioVolumeUp: 1, VolumeUp: 1, AudioVolumeDown: -1, VolumeDown: -1 };
+
+// Clean up settings from the removed Hand scratch mode.
 try {
-  const v = localStorage.getItem('djay.sens');
-  if (v !== null && SENS_LEVELS[+v]) sensIdx = +v;
+  localStorage.removeItem('djay.drag');
+  localStorage.removeItem('djay.sens');
 } catch {}
-const sensitivity = () => SENS_LEVELS[sensIdx][1];
 
 // ---------- state ----------
 
@@ -475,15 +468,8 @@ function release(d) {
   d.el.platter.classList.remove('held');
 }
 
-function stroke(d, dir) {
-  if (DRAG_MODE) {
-    // Armed (not held) in hand mode: a swipe is a quick push, then let go.
-    clearTimeout(d.strokeTimer);
-    d.strokeTimer = setTimeout(() => {
-      if (!drag) release(d);
-    }, 350);
-  }
-  post(d, { type: 'stroke', value: dir * 3 });
+function stroke(d, dir, strength = 3) {
+  post(d, { type: 'stroke', value: dir * strength });
   d.el.platter.classList.remove('flick-l', 'flick-r');
   void d.el.platter.offsetWidth;
   d.el.platter.classList.add(dir > 0 ? 'flick-r' : 'flick-l');
@@ -623,7 +609,6 @@ function frame(t) {
   requestAnimationFrame(frame);
   if (t - lastFrame < 32) return; // display runs at 30 Hz
   lastFrame = t;
-  if (motion.open) drawMotion();
   if (ctx) stepAutomix();
   for (const d of decks) {
     const pos = d.track ? estPos(d) : 0;
@@ -657,7 +642,7 @@ function renderHint() {
   const el = state.engaged || document.activeElement;
   let h = '';
   if (state.engaged?.dataset.kind === 'platter')
-    h = DRAG_MODE ? 'Pinch & move arm to scratch · ▲ cut · back = done' : '◀ ▶ scratch · ▲ fader cut · ▼ spinback · tap = let go';
+    h = '◀ ▶ scratch · ▲ fader cut · ▼ spinback · tap = let go';
   else if (state.engaged) h = el.dataset.param === 'tempo' ? '◀ ▶ ±1% · ▲ ▼ fine · tap = done' : '◀ ▶ adjust · tap = done';
   else h = el?.dataset?.hint || 'Swipe to move · tap to select';
   if (hintEl.textContent !== h) hintEl.textContent = h;
@@ -701,8 +686,7 @@ function engage(el) {
   if (el.dataset.kind === 'platter') {
     const d = decks[+el.dataset.deck];
     if (!d.track) return openLibrary(d.i);
-    // Hand scratch mode "arms" the record; pinching is what touches it.
-    if (!DRAG_MODE) grab(d);
+    grab(d);
   }
   state.engaged = el;
   el.classList.add('engaged');
@@ -785,24 +769,7 @@ async function buildHome() {
       : []),
     { kind: 'folder', label: 'Netlabels · Hip-Hop', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'hip hop' }) },
     { kind: 'folder', label: 'Netlabels · Electronic', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'electronic' }) },
-    {
-      kind: 'setting',
-      icon: '✋',
-      label: 'Hand scratch',
-      sub: 'Pinch & move your arm to scratch · app reloads',
-      value: DRAG_MODE ? 'ON' : 'OFF',
-      on: DRAG_MODE,
-      run: toggleDragMode,
-    },
-    {
-      kind: 'setting',
-      icon: '🎚',
-      label: 'Scratch sensitivity',
-      sub: 'How far the record moves per arm movement',
-      value: SENS_LEVELS[sensIdx][0],
-      run: (row) => cycleSensitivity(row),
-    },
-    { kind: 'setting', icon: '〰', label: 'Hand motion test', sub: 'See your arm movement live, for tuning', run: openMotionTest },
+    { kind: 'setting', icon: '〰', label: 'Input test', sub: 'See every signal the glasses send (try the twist)', run: openInputTest },
     { kind: 'setting', label: 'Device check', sub: 'What audio features these glasses support', run: showDeviceCheck, icon: '🔧' },
     ...DEMOS.map((item) => ({ kind: 'track', item })),
   ];
@@ -844,7 +811,7 @@ window.addEventListener('popstate', () => {
     return;
   }
   histDepth = Math.max(0, histDepth - 1);
-  if (motion.open) closeMotion();
+  if (inputTest.open) closeInputTest();
   else if (library.open) goBack(true);
   else if (state.engaged) disengage(false, true);
 });
@@ -1055,22 +1022,19 @@ searchInput.addEventListener('search', () => runSearch(searchInput.value));
 // ---------- input ----------
 
 document.addEventListener('keydown', (e) => {
-  if (e.isTrusted) {
-    const now = performance.now();
-    lastRealKeyAt = now;
-    realKeysSeen = true;
-    // Drop only exact repeats of a key we just generated from a gesture, and
-    // arrows that echo arm movement while scratching.
-    const arrow = e.key.startsWith('Arrow');
-    if ((e.key === lastSynthKey && now - lastSynthAt < 400) || (arrow && (drag || now - lastDragEndAt < 200))) {
+  if (inputTest.open) {
+    logInput('key', `${e.key}${e.code && e.code !== e.key ? ` (${e.code})` : ''}${e.repeat ? ' repeat' : ''}`);
+    if (e.key === 'Escape' || e.key === 'Backspace') {
       e.preventDefault();
-      return;
-    }
+      backLater(exitInputTest);
+    } else if (!(e.key in TWIST_KEYS)) e.preventDefault();
+    return;
   }
-  if (motion.open) {
+  // Pinch-and-twist, if it reaches the app as volume keys: scratch the
+  // grabbed record instead of changing the volume.
+  if (e.key in TWIST_KEYS && state.engaged?.dataset.kind === 'platter') {
     e.preventDefault();
-    const exits = DRAG_MODE ? ['Escape', 'Backspace'] : ['Escape', 'Backspace', 'Enter'];
-    if (exits.includes(e.key)) backLater(exitMotion);
+    stroke(decks[+state.engaged.dataset.deck], TWIST_KEYS[e.key], 2);
     return;
   }
   if (library.open) return libraryKey(e);
@@ -1081,9 +1045,6 @@ document.addEventListener('keydown', (e) => {
     const d = decks[+el.dataset.deck];
     if (el.dataset.kind === 'platter') {
       e.preventDefault();
-      // In hand mode a pinch is the hand touching the record, so its Enter
-      // is ignored; back disarms.
-      if (DRAG_MODE && k === 'Enter') return;
       if (k === 'ArrowRight') stroke(d, 1);
       else if (k === 'ArrowLeft') stroke(d, -1);
       else if (k === 'ArrowUp') {
@@ -1116,20 +1077,9 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- drag scratching ----------
-// Desktop/touch: drag a platter directly. Glasses in drag mode: the band's
-// drag arrives as pointer events. A drag on a grabbed record scratches;
-// otherwise short flicks and taps are read as swipes and pinches, so the app
-// stays navigable even if drag mode stops the arrow keys from coming through.
+// Drag a platter with a mouse or finger: the record follows the pointer.
 
 let drag = null;
-let gesture = null;
-let lastRealKeyAt = -Infinity;
-// Once the glasses deliver real swipe/pinch keys, gestures are never turned
-// into keys too (a pinch would otherwise count twice).
-let realKeysSeen = false;
-let lastSynthAt = -Infinity;
-let lastSynthKey = '';
-let lastDragEndAt = -Infinity;
 
 function startScratch(e, d) {
   if (!d.track) return;
@@ -1144,193 +1094,96 @@ function startScratch(e, d) {
   post(d, { type: 'follow', value: pos0 });
 }
 
-// Hand on the record: the record's position follows the hand's position.
 function moveScratch(e) {
   const dx = e.clientX - drag.x0;
   const dy = e.clientY - drag.y0;
-  // Lock to the axis the hand first moves along, so a stroke can't flip.
+  // Lock to the axis the pointer first moves along, so a stroke can't flip.
   if (!drag.axis && Math.hypot(dx, dy) > 12) drag.axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
   const disp = drag.axis === 'y' ? -dy : dx;
-  post(drag.d, { type: 'follow', value: drag.pos0 + disp * SECONDS_PER_PX * sensitivity() });
+  post(drag.d, { type: 'follow', value: drag.pos0 + disp * SECONDS_PER_PX });
 }
 
 document.addEventListener('pointerdown', (e) => {
-  if (motion.open) return motionPointer(e);
+  if (inputTest.open) return logPointer(e);
   ensureAudio();
-  if (DRAG_MODE) {
-    const armed = !library.open && state.engaged?.dataset.kind === 'platter';
-    if (armed) return startScratch(e, decks[+state.engaged.dataset.deck]);
-    gesture = { id: e.pointerId, x: e.clientX, y: e.clientY, at: performance.now() };
-    return;
-  }
-  if (BAND_POINTERS && e.pointerType !== 'mouse') return;
   const plat = e.target.closest?.('.platter');
   if (plat && !library.open) startScratch(e, decks[+plat.dataset.deck]);
 });
 
 document.addEventListener('pointermove', (e) => {
-  if (motion.open) return motionPointer(e);
+  if (inputTest.open) return logPointer(e);
   if (drag && e.pointerId === drag.id) moveScratch(e);
 });
 
 function endPointer(e) {
-  if (motion.open) return motionPointer(e);
-  if (drag && e.pointerId === drag.id) {
-    const g = drag;
-    drag = null;
-    lastDragEndAt = performance.now();
-    // Hand off the vinyl: the record plays on. (A record grabbed with the
-    // keyboard outside hand mode stays held until released.)
-    if (g.keep && !DRAG_MODE) post(g.d, { type: 'hold', value: true });
-    else release(g.d);
-  }
-  if (gesture && e.pointerId === gesture.id && e.type === 'pointerup') {
-    const g = gesture;
-    const dx = e.clientX - g.x;
-    const dy = e.clientY - g.y;
-    const key =
-      Math.hypot(dx, dy) < 20
-        ? 'Enter'
-        : Math.abs(dx) >= Math.abs(dy)
-          ? dx > 0 ? 'ArrowRight' : 'ArrowLeft'
-          : dy > 0 ? 'ArrowDown' : 'ArrowUp';
-    // If the glasses also sent a real key for this gesture, let that win.
-    setTimeout(() => {
-      // A real key for this gesture may arrive just before or after it.
-      if (realKeysSeen || lastRealKeyAt > g.at - 400) return;
-      lastSynthAt = performance.now();
-      lastSynthKey = key;
-      document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
-    }, 250);
-  }
-  if (gesture && e.pointerId === gesture.id) gesture = null;
+  if (inputTest.open) return logPointer(e);
+  if (!drag || e.pointerId !== drag.id) return;
+  const g = drag;
+  drag = null;
+  // A record grabbed with a swipe/tap stays held; otherwise it plays on.
+  if (g.keep) post(g.d, { type: 'hold', value: true });
+  else release(g.d);
 }
 document.addEventListener('pointerup', endPointer);
 document.addEventListener('pointercancel', endPointer);
 
-// ---------- hand motion test ----------
-// Meta says drag coordinates must be checked on real glasses, so this screen
-// shows the raw pointer stream: trail, event rate, and how far a scratch
-// would move the record.
+// Scroll/wheel input (in case the twist arrives that way): scratch the
+// grabbed record.
+document.addEventListener(
+  'wheel',
+  (e) => {
+    if (inputTest.open) {
+      e.preventDefault();
+      return logInput('wheel', `dx ${e.deltaX.toFixed(1)} · dy ${e.deltaY.toFixed(1)} · mode ${e.deltaMode}`);
+    }
+    if (state.engaged?.dataset.kind !== 'platter') return;
+    e.preventDefault();
+    const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+    if (delta) stroke(decks[+state.engaged.dataset.deck], delta > 0 ? -1 : 1, 2);
+  },
+  { passive: false },
+);
 
-const motion = { open: false, pts: [], times: [], down: false, x0: 0, y0: 0, type: '', last: null, maxDisp: 0 };
-const motionEl = $('#motion');
-const motionCanvas = $('#motionCanvas');
-const motionStats = $('#motionStats');
+// ---------- input test ----------
+// Lists every signal the glasses deliver, to find out how gestures (like the
+// band's pinch-and-twist) reach web apps.
 
-function openMotionTest() {
-  Object.assign(motion, { open: true, pts: [], times: [], down: false, type: '', last: null, maxDisp: 0 });
-  motionEl.hidden = false;
+const inputTest = { open: false, lastMoveLog: 0 };
+const inputEl = $('#inputTest');
+const inputLog = $('#inputLog');
+
+function openInputTest() {
+  inputTest.open = true;
+  inputLog.innerHTML = '';
+  inputEl.hidden = false;
   histPush();
-  drawMotion();
 }
 
-function closeMotion() {
-  motion.open = false;
-  motionEl.hidden = true;
+function closeInputTest() {
+  inputTest.open = false;
+  inputEl.hidden = true;
 }
 
-function exitMotion() {
+function exitInputTest() {
   if (histDepth > 0) history.back(); // popstate closes it
-  else closeMotion();
+  else closeInputTest();
 }
 
-function motionPointer(e) {
-  e.preventDefault();
-  const now = performance.now();
-  motion.type = e.pointerType || '?';
-  motion.last = { x: e.clientX, y: e.clientY };
-  if (e.type === 'pointerdown') {
-    Object.assign(motion, { down: true, x0: e.clientX, y0: e.clientY, pts: [], maxDisp: 0 });
-  }
-  if (e.type === 'pointermove' || e.type === 'pointerdown') {
-    motion.pts.push({ x: e.clientX, y: e.clientY, down: motion.down });
-    if (motion.pts.length > 400) motion.pts.shift();
-    motion.times.push(now);
-    if (motion.down) {
-      const dx = e.clientX - motion.x0;
-      const dy = e.clientY - motion.y0;
-      motion.maxDisp = Math.max(motion.maxDisp, Math.abs(dx), Math.abs(dy));
-    }
-  }
-  if (e.type === 'pointerup' || e.type === 'pointercancel') motion.down = false;
+function logInput(kind, detail) {
+  const li = document.createElement('li');
+  const t = new Date();
+  li.innerHTML = `<span class="t">${t.toLocaleTimeString([], { hour12: false })}</span><b>${esc(kind)}</b> ${esc(detail)}`;
+  inputLog.prepend(li);
+  while (inputLog.children.length > 12) inputLog.lastChild.remove();
 }
 
-function drawMotion() {
-  if (!motion.open) return;
-  const g = motionCanvas.getContext('2d');
-  const W = motionCanvas.width;
-  const H = motionCanvas.height;
-  const sx = W / 600;
-  const sy = H / 600;
-  g.clearRect(0, 0, W, H);
-  g.strokeStyle = '#3a4150';
-  g.strokeRect(1, 1, W - 2, H - 2);
-  g.lineWidth = 3;
-  g.lineJoin = 'round';
-  let prev = null;
-  for (const p of motion.pts) {
-    if (prev) {
-      g.strokeStyle = p.down ? '#22d3ee' : '#ff4fd8';
-      g.beginPath();
-      g.moveTo(prev.x * sx, prev.y * sy);
-      g.lineTo(p.x * sx, p.y * sy);
-      g.stroke();
-    }
-    prev = p;
+function logPointer(e) {
+  if (e.type === 'pointermove') {
+    const now = performance.now();
+    if (now - inputTest.lastMoveLog < 250) return;
+    inputTest.lastMoveLog = now;
   }
-  if (motion.last) {
-    g.fillStyle = motion.down ? '#ffd23f' : '#ffffff';
-    g.beginPath();
-    g.arc(motion.last.x * sx, motion.last.y * sy, 8, 0, Math.PI * 2);
-    g.fill();
-  }
-  const now = performance.now();
-  motion.times = motion.times.filter((t) => now - t < 1000);
-  const secs = motion.maxDisp * SECONDS_PER_PX * sensitivity();
-  motionStats.innerHTML = motion.last
-    ? `<b>${motion.times.length}</b> events/s · ${esc(motion.type)} · x ${Math.round(motion.last.x)}, y ${Math.round(motion.last.y)}<br>` +
-      `Biggest move this pinch: <b>${Math.round(motion.maxDisp)} px</b> → record moves <b>${secs.toFixed(2)} s</b> (${SENS_LEVELS[sensIdx][0]})`
-    : DRAG_MODE
-      ? 'Pinch and move your arm…'
-      : 'Turn on Hand scratch first (Library), then come back here.';
-}
-
-function cycleSensitivity(row) {
-  sensIdx = (sensIdx + 1) % SENS_LEVELS.length;
-  try {
-    localStorage.setItem('djay.sens', String(sensIdx));
-  } catch {}
-  row.value = SENS_LEVELS[sensIdx][0];
-  renderLibrary();
-}
-
-function toggleDragMode(row) {
-  const on = !DRAG_MODE;
-  try {
-    localStorage.setItem('djay.drag', on ? '1' : '0');
-  } catch {}
-  if (!on) {
-    // Off takes effect immediately; no reload needed.
-    disengage();
-    drag = null;
-    gesture = null;
-    DRAG_MODE = false;
-    document.getElementById('dragStyle')?.remove();
-    document.documentElement.dataset.drag = '0';
-    if (row) {
-      row.value = 'OFF';
-      row.on = false;
-    }
-    renderLibrary();
-    toast('Hand scratch off');
-    return;
-  }
-  // On needs a fresh page load (Meta's rule for arm tracking).
-  toast('Turning on Hand scratch…');
-  const url = new URL(location.href);
-  url.searchParams.delete('drag');
-  setTimeout(() => location.replace(url), 300);
+  logInput(e.type.replace('pointer', 'pointer '), `${e.pointerType || '?'} · x ${Math.round(e.clientX)}, y ${Math.round(e.clientY)}`);
 }
 
 // Desktop convenience: drop an audio file on the left/right half to load it.
@@ -1344,8 +1197,7 @@ document.addEventListener('drop', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-  if (motion.open) return;
-  if (BAND_POINTERS && e.pointerType !== 'mouse') return;
+  if (inputTest.open) return;
   const el = e.target.closest?.('#app .focusable');
   if (el && e.detail) {
     el.focus();
@@ -1366,7 +1218,6 @@ renderButtons();
 renderSliders();
 buildHome();
 $('[data-action="library"]').focus();
-if (DRAG_MODE) toast('Hand scratch ON — tap a record, then pinch & move your arm', 3500);
 requestAnimationFrame(frame);
 
-window.djay = { decks, state, library, input: () => ({ now: performance.now(), lastRealKeyAt, lastSynthAt, lastDragEndAt, drag: !!drag, gesture: !!gesture, histDepth }), motion }; // handy for debugging in the console
+window.djay = { decks, state, library }; // handy for debugging in the console
