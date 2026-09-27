@@ -7,6 +7,7 @@ A two-deck DJ mixer that runs as a web app on Meta Ray-Ban Display glasses. You 
 - Automix: a beat-matched 16-beat blend with a filter sweep on the outgoing track
 - Crossfader, tempo (±16%), and a low-pass/high-pass filter per deck
 - Crossfader-cut "transformer" scratches
+- Slip mode (scratch without losing the beat) and Quantize (play, cue and scratch snap to the beat)
 - Music from **Apple Music** (30-second previews), **Audius** (full tracks), 4 built-in demo loops, or your own files
 
 No build step. Plain HTML/CSS/JS, about 60 KB in total.
@@ -22,24 +23,18 @@ No build step. Plain HTML/CSS/JS, about 60 KB in total.
 | Grabbed platter | Swipe ▲ | Toggle crossfader cut (transformer) |
 | Grabbed platter | Swipe ▼ | Let go with a spinback |
 | Grabbed platter | Tap | Let go (the record plays on) |
-| Grabbed platter | Pinch-and-twist (if the glasses pass it on) | Scratch forward / back |
 | Slider | Tap, then ◀ ▶ | Adjust (▲ ▼ = fine tempo), tap again when done |
 | Library track | ◀ / ▶ | Load onto deck A / B |
 | Library | Tap search row | Opens the glasses keyboard |
 
 To practice a baby scratch: grab the platter, then swipe right, left, right, left in time with the beat on the "ahh" vocal in the demo tracks.
 
-### Twist scratch (experimental)
+### Slip and Quantize
 
-Grab a record (tap the platter), then use the band's **pinch-and-twist** (volume) gesture:
+- **SLIP** (per deck): while you scratch, hold or spin back the record, the track keeps running silently underneath. A yellow line on the waveform shows where. Let go and playback rejoins it, so you never lose the beat.
+- **QUANTIZE** (middle column): pressing play starts a deck in step with the other deck's beats (or on its own nearest beat if the other isn't playing). Cue points snap to the nearest beat, and letting go of a scratch lands back in step with the other deck.
 
-- On Meta Ray-Ban Display the twist reaches web apps as key `Unidentified` with keyCode 0 **in both directions**, so the app can't tell which way you twisted.
-- So each **burst** of twisting pushes the record one way, and the next burst (after a pause of about 0.2 s) pulls it back. Twist, pause, twist, pause = forward, back, forward, back: a baby scratch in the rhythm of your wrist.
-- If a device does report direction (volume keys, keyCodes 24/25 or 175/174, or scroll/wheel), that direction is used instead.
-
-**Library → Input test** lists every signal the glasses send (key names, keyCodes, key-ups, wheel and pointer events).
-
-(An earlier arm-tracking "Hand scratch" mode was removed because the band's pinch arrived as several overlapping signals.)
+Swipe scratches are shaped like a hand movement: each swipe moves the record 0.25 s with an ease-in/ease-out curve, so strokes start, stop and reverse smoothly.
 
 ## Music sources
 

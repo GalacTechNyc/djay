@@ -82,15 +82,15 @@ canvas { display: block; width: 280px; height: 40px; }
 @keyframes flickR { 50% { translate: 4px 0; } }
 @keyframes flickL { 50% { translate: -4px 0; } }
 
-.center { position: absolute; left: 228px; width: 144px; top: 20px; display: flex; flex-direction: column; gap: 14px; }
-.center button { height: 86px; font-size: 30px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.center { position: absolute; left: 228px; width: 144px; top: 8px; display: flex; flex-direction: column; gap: 10px; }
+.center button { height: 64px; font-size: 24px; display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 8px; }
 .center button span { font-size: 16px; font-weight: 600; }
 .center button.on { border-color: var(--hot); color: var(--hot); }
 
 /* ---------- transport ---------- */
 .buttons { position: absolute; top: 336px; left: 10px; right: 10px; height: 56px; display: flex; justify-content: space-between; }
-.grp { display: flex; gap: 8px; width: 280px; }
-.buttons button { flex: 1; font-size: 18px; font-weight: 700; letter-spacing: 0.04em; }
+.grp { display: flex; gap: 6px; width: 284px; }
+.buttons button { flex: 1; min-width: 0; padding: 0; font-size: 17px; font-weight: 700; letter-spacing: 0.02em; }
 .buttons .a button.on { background: var(--a); color: #000; border-color: var(--a); }
 .buttons .b button.on { background: var(--b); color: #000; border-color: var(--b); }
 
@@ -156,14 +156,3 @@ canvas { display: block; width: 280px; height: 40px; }
 .row.info small.good { color: #4ade80; }
 .row.info small.bad { color: #ff6b6b; }
 
-/* ---------- input test ---------- */
-#inputTest { position: absolute; inset: 0; background: #000; padding: 14px 20px; display: flex; flex-direction: column; gap: 6px; }
-#inputTest[hidden] { display: none; }
-#inputTest h1 { margin: 0; font-size: 22px; }
-#inputTest p { margin: 0; font-size: 16px; color: var(--dim); }
-#inputLog { list-style: none; margin: 4px 0 0; padding: 0; flex: 1; overflow: hidden; }
-#inputLog li { font-size: 17px; padding: 5px 0; border-bottom: 1px solid #1c2230; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#inputLog li:first-child { color: var(--hot); }
-#inputLog .t { color: var(--dim); font-size: 14px; margin-right: 10px; }
-#inputLog b { margin-right: 6px; }
-#inputTest .hint { font-size: 16px; color: var(--dim); text-align: center; }

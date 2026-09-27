@@ -20,11 +20,22 @@ export class DeckCore {
     this.tempo = 1;
 
     this.held = false;   // "hand on the record"
-    this.scratchVel = 0; // speed the hand is pushing the record
-    this.strokeDecay = Math.exp(-1 / (0.09 * sampleRate));
     this.spinning = false; // free-spinning backwards (spinback effect)
-    this.follow = false; // hand-position scratching
+    this.follow = false; // pointer drag: record chases the pointer's position
     this.target = 0;
+
+    // A swipe stroke: the record travels a set distance with an ease-in /
+    // ease-out curve, like a hand pushing vinyl.
+    this.stroking = false;
+    this.strokeDist = 0;
+    this.strokeLen = 1;
+    this.strokeT = 0;
+    this.strokeDone = 0;
+
+    // Slip: the track keeps running silently while the record is touched,
+    // and playback rejoins it on release.
+    this.slip = false;
+    this.slipPos = 0;
 
     this.blocks = 0;
   }
@@ -39,53 +50,83 @@ export class DeckCore {
         this.srRatio = m.sampleRate / this.sampleRate;
         this.loop = !!m.loop;
         this.pos = 0;
+        this.slipPos = 0;
         this.rate = 0;
         this.playing = false;
         this.held = false;
-        this.scratchVel = 0;
         this.spinning = false;
+        this.follow = false;
+        this.stroking = false;
         break;
       case 'play':
         this.playing = m.value;
+        // Quantized start: full speed at once, no motor spin-up.
+        if (m.value && m.instant && !this.held) this.rate = this.tempo;
         break;
       case 'tempo':
         this.tempo = m.value;
         break;
       case 'seek':
         this.pos = Math.max(0, Math.min(this.len - 1, m.value * this.bufRate));
+        this.slipPos = this.pos;
+        break;
+      case 'slip':
+        this.slip = m.value;
+        this.slipPos = this.pos;
         break;
       case 'hold':
         this.held = m.value;
-        this.scratchVel = 0;
         this.spinning = false;
         this.follow = false;
+        this.stroking = false;
+        if (!m.value) {
+          // Quantized release: back to full speed instantly so it lands on the beat.
+          if (m.instant && this.playing) this.rate = this.tempo;
+          this.rejoin();
+        }
         break;
       case 'stroke':
-        // A discrete swipe: shove the record, then friction brings it to rest.
+        // m.dist seconds (negative = backwards) over m.dur seconds.
         this.held = true;
         this.spinning = false;
         this.follow = false;
-        this.scratchVel = m.value;
-        break;
-      case 'drag':
-        // Continuous drag: hand speed set directly.
-        this.held = true;
-        this.follow = false;
-        this.scratchVel = m.value;
+        this.stroking = true;
+        this.strokeDist = m.dist * this.bufRate;
+        this.strokeLen = Math.max(1, Math.round(m.dur * this.sampleRate));
+        this.strokeT = 0;
+        this.strokeDone = 0;
         break;
       case 'follow':
-        // Hand on the record: chase the hand's position (seconds into the track).
+        // Pointer on the record: chase its position (seconds into the track).
         this.held = true;
         this.spinning = false;
+        this.stroking = false;
         this.follow = true;
         this.target = m.value * this.bufRate;
         break;
       case 'spinback':
         this.held = false;
+        this.follow = false;
+        this.stroking = false;
         this.rate = -m.value;
         this.spinning = true;
         break;
     }
+  }
+
+  // Letting go in slip mode: jump to where the track would be and play on at
+  // full speed, so the beat never drifts.
+  rejoin() {
+    if (this.slip && this.playing) {
+      this.pos = this.slipPos;
+      this.rate = this.tempo;
+    }
+  }
+
+  wrap(p) {
+    if (p >= this.len) return this.loop ? p - this.len : this.len - 1;
+    if (p < 0) return this.loop ? p + this.len : 0;
+    return p;
   }
 
   // Fill one block of output. blocksPerReport controls how often position is reported.
@@ -102,9 +143,18 @@ export class DeckCore {
     let ended = false;
 
     for (let i = 0; i < n; i++) {
-      if (this.held && this.follow) {
-        // Speed proportional to how far the record lags the hand (closes the
-        // gap in ~20 ms), so the record stops when the hand stops.
+      if (this.held && this.stroking) {
+        // Raised-cosine position curve: zero speed at both ends, so strokes
+        // start, stop and reverse without clicks.
+        this.strokeT++;
+        const x = this.strokeT >= this.strokeLen ? 1 : this.strokeT / this.strokeLen;
+        const done = this.strokeDist * (0.5 - 0.5 * Math.cos(Math.PI * x));
+        this.rate = (done - this.strokeDone) / this.srRatio;
+        this.strokeDone = done;
+        if (x >= 1) this.stroking = false;
+      } else if (this.held && this.follow) {
+        // Speed proportional to how far the record lags the pointer (closes
+        // the gap in ~20 ms), so the record stops when the pointer stops.
         let gap = this.target - this.pos;
         if (this.loop) {
           if (gap > len / 2) gap -= len;
@@ -115,11 +165,13 @@ export class DeckCore {
         else if (want < -12) want = -12;
         this.rate += (want - this.rate) * 0.05;
       } else if (this.held) {
-        this.rate += (this.scratchVel - this.rate) * 0.02;
-        this.scratchVel *= this.strokeDecay;
+        this.rate *= 0.98; // hand resting on the record
       } else if (this.spinning) {
         this.rate *= 0.99997;
-        if (this.rate > -0.3) this.spinning = false;
+        if (this.rate > -0.3) {
+          this.spinning = false;
+          this.rejoin();
+        }
       } else {
         const target = this.playing ? this.tempo : 0;
         // Motor start is quick, brake is a touch slower — like a real deck.
@@ -134,22 +186,33 @@ export class DeckCore {
       oR[i] = R[i0] + (R[i1] - R[i0]) * f;
 
       this.pos += this.rate * this.srRatio;
-      if (this.pos >= len) {
-        if (this.loop) this.pos -= len;
-        else {
-          this.pos = len - 1;
-          if (this.playing) ended = true;
-          this.playing = false;
-          this.rate = 0;
-        }
-      } else if (this.pos < 0) {
-        this.pos = this.loop ? this.pos + len : 0;
+      if (this.pos >= len && !this.loop) {
+        this.pos = len - 1;
+        if (this.playing) ended = true;
+        this.playing = false;
+        this.rate = 0;
+      } else {
+        this.pos = this.wrap(this.pos);
+      }
+
+      // Slip: while the record is touched, a silent copy of the track keeps
+      // playing; otherwise it just shadows the real position.
+      if (this.slip && (this.held || this.spinning)) {
+        if (this.playing) this.slipPos = this.wrap(this.slipPos + this.tempo * this.srRatio);
+      } else {
+        this.slipPos = this.pos;
       }
     }
 
     if (ended) this.emit({ type: 'ended' });
     if (++this.blocks % blocksPerReport === 0) {
-      this.emit({ type: 'pos', pos: this.pos / this.bufRate, rate: this.rate });
+      const slipping = this.slip && (this.held || this.spinning);
+      this.emit({
+        type: 'pos',
+        pos: this.pos / this.bufRate,
+        rate: this.rate,
+        slipPos: slipping ? this.slipPos / this.bufRate : null,
+      });
     }
   }
 }

@@ -35,6 +35,7 @@
       <div class="center">
         <button class="focusable" data-action="library" data-hint="Browse Apple Music, Audius and demo tracks">♫<span>Library</span></button>
         <button class="focusable" data-action="automix" data-hint="Beat-matched 16-beat blend to the other deck">⇄<span>Automix</span></button>
+        <button class="focusable" data-action="quantize" data-hint="Quantize: play, cue and scratch snap to the beat">⌗<span>Quantize</span></button>
       </div>
       <div class="platter b focusable" id="platB" tabindex="0" data-deck="1" data-kind="platter"
            data-hint="Tap to grab the record, then swipe to scratch">
@@ -47,8 +48,10 @@
         <button class="focusable" data-action="play" data-deck="0" data-hint="Play / pause deck A">▶</button>
         <button class="focusable" data-action="cue" data-deck="0" data-hint="Playing: jump back to cue · Paused: set cue">CUE</button>
         <button class="focusable" data-action="sync" data-deck="0" data-hint="Match A's tempo and beats to B">SYNC</button>
+        <button class="focusable" data-action="slip" data-deck="0" data-hint="Slip: scratch without losing the beat">SLIP</button>
       </div>
       <div class="grp b">
+        <button class="focusable" data-action="slip" data-deck="1" data-hint="Slip: scratch without losing the beat">SLIP</button>
         <button class="focusable" data-action="sync" data-deck="1" data-hint="Match B's tempo and beats to A">SYNC</button>
         <button class="focusable" data-action="cue" data-deck="1" data-hint="Playing: jump back to cue · Paused: set cue">CUE</button>
         <button class="focusable" data-action="play" data-deck="1" data-hint="Play / pause deck B">▶</button>
@@ -88,13 +91,6 @@
     <ul id="libList" tabindex="-1"></ul>
     <input id="search" type="search" placeholder="Search songs or artists…" autocomplete="off">
     <div id="libHint"></div>
-  </div>
-
-  <div id="inputTest" hidden>
-    <h1>Input test</h1>
-    <p>Twist up a few times, then down a few times. Every signal the app receives shows up here.</p>
-    <ul id="inputLog"></ul>
-    <div class="hint">back = exit</div>
   </div>
 
   <script type="module" src="app.js"></script>

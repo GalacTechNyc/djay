@@ -19,27 +19,6 @@ const TEMPO_RANGE = 0.16;
 // Mouse/touch platter dragging: how far the record moves per pixel.
 const SECONDS_PER_PX = 1 / 400;
 
-// Volume/scroll signals that might come from the band's pinch-and-twist.
-// While a record is grabbed they scratch instead of changing volume.
-const TWIST_KEYS = { AudioVolumeUp: 1, VolumeUp: 1, AudioVolumeDown: -1, VolumeDown: -1 };
-// Raw key numbers for volume up/down: Android (24/25) and Windows (175/174).
-const TWIST_KEYCODES = { 24: 1, 175: 1, 25: -1, 174: -1 };
-// The glasses send the twist as key "Unidentified", so fall back to keyCode.
-const twistDir = (e) => TWIST_KEYS[e.key] ?? (e.key === 'Unidentified' || !e.key ? TWIST_KEYCODES[e.keyCode] : undefined);
-// On Meta Ray-Ban Display the twist arrives as "Unidentified" with keyCode 0
-// in both directions, so direction can't be read. Instead, each burst of
-// twisting pushes the record one way and the next burst (after a pause)
-// pulls it back: twist, pause, twist = forward, back — a baby scratch.
-const isBlindTwist = (e) => (e.key === 'Unidentified' || !e.key) && !e.keyCode;
-const TWIST_BURST_GAP = 180; // ms of quiet that ends a burst
-let twistBurst = { dir: -1, last: -Infinity };
-function twistTick(d) {
-  const now = performance.now();
-  if (now - twistBurst.last > TWIST_BURST_GAP) twistBurst.dir = -twistBurst.dir;
-  twistBurst.last = now;
-  stroke(d, twistBurst.dir, 2);
-}
-
 // Clean up settings from the removed Hand scratch mode.
 try {
   localStorage.removeItem('djay.drag');
@@ -55,6 +34,7 @@ const state = {
   automix: null,
   audioReady: null,
   toastUntil: 0,
+  quantize: false,
 };
 
 const decks = [0, 1].map((i) => ({
@@ -68,6 +48,7 @@ const decks = [0, 1].map((i) => ({
     disc: $(`#plat${'AB'[i]} .disc`),
     play: $(`[data-action="play"][data-deck="${i}"]`),
     sync: $(`[data-action="sync"][data-deck="${i}"]`),
+    slip: $(`[data-action="slip"][data-deck="${i}"]`),
   },
   node: null,
   filter: null,
@@ -85,6 +66,8 @@ const decks = [0, 1].map((i) => ({
   cue: 0,
   peaks: null,
   sync: false,
+  slip: false,
+  slipPos: null,
   held: false,
   loading: false,
 }));
@@ -166,6 +149,7 @@ function onDeckMessage(d, m) {
   if (m.type === 'pos') {
     d.pos = m.pos;
     d.rate = m.rate;
+    d.slipPos = m.slipPos;
     d.posAt = performance.now();
   } else if (m.type === 'ended') {
     d.playing = false;
@@ -261,6 +245,7 @@ async function loadTrack(d, item) {
     post(d, { type: 'load', L: Lc, R: Rc, sampleRate: buf.sampleRate, loop: !!item.loop }, Rc ? [Lc.buffer, Rc.buffer] : [Lc.buffer]);
     post(d, { type: 'tempo', value: 1 });
     post(d, { type: 'seek', value: d.cue });
+    post(d, { type: 'slip', value: d.slip });
     d.el.disc.style.backgroundImage = item.art ? `url("${item.art}")` : '';
     d.el.platter.classList.toggle('has-art', !!item.art);
     toast(`${d.name} ← ${item.title}`);
@@ -341,7 +326,24 @@ async function togglePlay(d) {
   }
   if (!d.track) return openLibrary(d.i);
   d.playing = !d.playing;
-  post(d, { type: 'play', value: d.playing });
+  if (d.playing && state.quantize) {
+    // Start in step with the other deck, or on this track's nearest beat.
+    const lead = decks[1 - d.i];
+    if (lead.playing && lead.track) alignPhase(d, lead);
+    else post(d, { type: 'seek', value: snapToBeat(d, estPos(d)) });
+  }
+  post(d, { type: 'play', value: d.playing, instant: d.playing && state.quantize });
+  renderButtons();
+}
+
+function snapToBeat(d, t) {
+  const beat = 60 / d.bpm;
+  return Math.max(0, d.offset + Math.round((t - d.offset) / beat) * beat);
+}
+
+function toggleQuantize() {
+  state.quantize = !state.quantize;
+  toast(state.quantize ? 'Quantize on — play, cue and scratch snap to the beat' : 'Quantize off');
   renderButtons();
 }
 
@@ -353,8 +355,9 @@ function cue(d) {
     post(d, { type: 'seek', value: d.cue });
     toast(`${d.name}: back to cue`);
   } else {
-    d.cue = estPos(d);
-    toast(`${d.name}: cue set ${fmt(d.cue)}`);
+    d.cue = state.quantize ? snapToBeat(d, estPos(d)) : estPos(d);
+    if (state.quantize) post(d, { type: 'seek', value: d.cue });
+    toast(`${d.name}: cue set ${fmt(d.cue)}${state.quantize ? ' (on beat)' : ''}`);
   }
   renderButtons();
 }
@@ -385,6 +388,15 @@ function alignPhase(d, lead) {
   if (target - pos > bd / 2) target -= bd;
   if (pos - target > bd / 2) target += bd;
   post(d, { type: 'seek', value: Math.max(0, target) });
+}
+
+// Slip: scratch, spin back or hold the record while the track keeps running
+// silently underneath; letting go picks up right on the beat.
+function toggleSlip(d) {
+  d.slip = !d.slip;
+  post(d, { type: 'slip', value: d.slip });
+  toast(`${d.name} slip ${d.slip ? 'on — scratch without losing the beat' : 'off'}`);
+  renderButtons();
 }
 
 function toggleSync(d) {
@@ -474,7 +486,6 @@ function nextTrack(current) {
 // ---------- scratching ----------
 
 function grab(d) {
-  twistBurst = { dir: -1, last: -Infinity };
   d.held = true;
   post(d, { type: 'hold', value: true });
   d.el.platter.classList.add('held');
@@ -482,12 +493,19 @@ function grab(d) {
 
 function release(d) {
   d.held = false;
-  post(d, { type: 'hold', value: false });
   d.el.platter.classList.remove('held');
+  // Quantize (without slip): let go right in step with the other deck.
+  const lead = decks[1 - d.i];
+  const snap = state.quantize && !d.slip && d.playing && lead.playing && lead.track;
+  post(d, { type: 'hold', value: false, instant: snap });
+  if (snap) alignPhase(d, lead);
 }
 
-function stroke(d, dir, strength = 3) {
-  post(d, { type: 'stroke', value: dir * strength });
+// One swipe = the record travels 0.25 s with an ease-in/ease-out curve, like
+// a hand pushing vinyl (about 2.5x speed at the middle of the stroke).
+const STROKE = { dist: 0.25, dur: 0.16 };
+function stroke(d, dir) {
+  post(d, { type: 'stroke', dist: dir * STROKE.dist, dur: STROKE.dur });
   d.el.platter.classList.remove('flick-l', 'flick-r');
   void d.el.platter.offsetWidth;
   d.el.platter.classList.add(dir > 0 ? 'flick-r' : 'flick-l');
@@ -571,8 +589,10 @@ function renderButtons() {
     d.el.play.textContent = d.playing ? '❚❚' : '▶';
     d.el.play.classList.toggle('on', d.playing);
     d.el.sync.classList.toggle('on', d.sync);
+    d.el.slip.classList.toggle('on', d.slip);
   }
   $('[data-action="automix"]').classList.toggle('on', !!state.automix);
+  $('[data-action="quantize"]').classList.toggle('on', state.quantize);
 }
 
 function renderSliders() {
@@ -620,6 +640,16 @@ function drawWave(d, pos) {
   }
   g.fillStyle = '#ffffff';
   g.fillRect(W / 2 - 1, 0, 2, H);
+  // Slip: where the silent track is while the record is being scratched.
+  if (d.slipPos != null) {
+    let off = d.slipPos - pos;
+    if (loop && d.duration) off -= Math.round(off / d.duration) * d.duration;
+    const x = W / 2 + (off / span) * W;
+    if (x >= 0 && x <= W) {
+      g.fillStyle = 'rgba(255, 210, 63, 0.85)';
+      g.fillRect(x - 1, 0, 2, H);
+    }
+  }
 }
 
 let lastFrame = 0;
@@ -747,10 +777,14 @@ function activate(el) {
       return cue(d);
     case 'sync':
       return toggleSync(d);
+    case 'slip':
+      return toggleSlip(d);
     case 'library':
       return openLibrary();
     case 'automix':
       return toggleAutomix();
+    case 'quantize':
+      return toggleQuantize();
   }
   if (el.dataset.kind) engage(el);
 }
@@ -787,7 +821,6 @@ async function buildHome() {
       : []),
     { kind: 'folder', label: 'Netlabels · Hip-Hop', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'hip hop' }) },
     { kind: 'folder', label: 'Netlabels · Electronic', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'electronic' }) },
-    { kind: 'setting', icon: '〰', label: 'Input test', sub: 'See every signal the glasses send (try the twist)', run: openInputTest },
     { kind: 'setting', label: 'Device check', sub: 'What audio features these glasses support', run: showDeviceCheck, icon: '🔧' },
     ...DEMOS.map((item) => ({ kind: 'track', item })),
   ];
@@ -829,8 +862,7 @@ window.addEventListener('popstate', () => {
     return;
   }
   histDepth = Math.max(0, histDepth - 1);
-  if (inputTest.open) closeInputTest();
-  else if (library.open) goBack(true);
+  if (library.open) goBack(true);
   else if (state.engaged) disengage(false, true);
 });
 
@@ -1040,24 +1072,6 @@ searchInput.addEventListener('search', () => runSearch(searchInput.value));
 // ---------- input ----------
 
 document.addEventListener('keydown', (e) => {
-  if (inputTest.open) {
-    logKey(e);
-    if (e.key === 'Escape' || e.key === 'Backspace') {
-      e.preventDefault();
-      backLater(exitInputTest);
-    } else if (twistDir(e) === undefined) e.preventDefault();
-    return;
-  }
-  // Pinch-and-twist arrives as volume keys: scratch the grabbed record
-  // instead of changing the volume.
-  const twist = twistDir(e);
-  if (state.engaged?.dataset.kind === 'platter' && (twist !== undefined || isBlindTwist(e))) {
-    e.preventDefault();
-    const d = decks[+state.engaged.dataset.deck];
-    if (twist !== undefined) stroke(d, twist, 2);
-    else twistTick(d);
-    return;
-  }
   if (library.open) return libraryKey(e);
   const k = e.key;
   const el = state.engaged;
@@ -1125,19 +1139,16 @@ function moveScratch(e) {
 }
 
 document.addEventListener('pointerdown', (e) => {
-  if (inputTest.open) return logPointer(e);
   ensureAudio();
   const plat = e.target.closest?.('.platter');
   if (plat && !library.open) startScratch(e, decks[+plat.dataset.deck]);
 });
 
 document.addEventListener('pointermove', (e) => {
-  if (inputTest.open) return logPointer(e);
   if (drag && e.pointerId === drag.id) moveScratch(e);
 });
 
 function endPointer(e) {
-  if (inputTest.open) return logPointer(e);
   if (!drag || e.pointerId !== drag.id) return;
   const g = drag;
   drag = null;
@@ -1147,76 +1158,6 @@ function endPointer(e) {
 }
 document.addEventListener('pointerup', endPointer);
 document.addEventListener('pointercancel', endPointer);
-
-// Scroll/wheel input (in case the twist arrives that way): scratch the
-// grabbed record.
-document.addEventListener(
-  'wheel',
-  (e) => {
-    if (inputTest.open) {
-      e.preventDefault();
-      return logInput('wheel', `dx ${e.deltaX.toFixed(1)} · dy ${e.deltaY.toFixed(1)} · mode ${e.deltaMode}`);
-    }
-    if (state.engaged?.dataset.kind !== 'platter') return;
-    e.preventDefault();
-    const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-    if (delta) stroke(decks[+state.engaged.dataset.deck], delta > 0 ? -1 : 1, 2);
-  },
-  { passive: false },
-);
-
-// ---------- input test ----------
-// Lists every signal the glasses deliver, to find out how gestures (like the
-// band's pinch-and-twist) reach web apps.
-
-const inputTest = { open: false, lastMoveLog: 0 };
-const inputEl = $('#inputTest');
-const inputLog = $('#inputLog');
-
-function openInputTest() {
-  inputTest.open = true;
-  inputLog.innerHTML = '';
-  inputEl.hidden = false;
-  histPush();
-}
-
-function closeInputTest() {
-  inputTest.open = false;
-  inputEl.hidden = true;
-}
-
-function exitInputTest() {
-  if (histDepth > 0) history.back(); // popstate closes it
-  else closeInputTest();
-}
-
-function logInput(kind, detail) {
-  const li = document.createElement('li');
-  const t = new Date();
-  li.innerHTML = `<span class="t">${t.toLocaleTimeString([], { hour12: false })}</span><b>${esc(kind)}</b> ${esc(detail)}`;
-  inputLog.prepend(li);
-  while (inputLog.children.length > 12) inputLog.lastChild.remove();
-}
-
-function logKey(e) {
-  const parts = [`keyCode ${e.keyCode}`];
-  if (e.code) parts.push(`code ${e.code}`);
-  if (e.location) parts.push(`loc ${e.location}`);
-  if (e.repeat) parts.push('repeat');
-  logInput(e.type === 'keyup' ? 'key up' : 'key', `${e.key || '(none)'} · ${parts.join(' · ')}`);
-}
-document.addEventListener('keyup', (e) => {
-  if (inputTest.open) logKey(e);
-});
-
-function logPointer(e) {
-  if (e.type === 'pointermove') {
-    const now = performance.now();
-    if (now - inputTest.lastMoveLog < 250) return;
-    inputTest.lastMoveLog = now;
-  }
-  logInput(e.type.replace('pointer', 'pointer '), `${e.pointerType || '?'} · x ${Math.round(e.clientX)}, y ${Math.round(e.clientY)}`);
-}
 
 // Desktop convenience: drop an audio file on the left/right half to load it.
 document.addEventListener('dragover', (e) => e.preventDefault());
@@ -1229,7 +1170,6 @@ document.addEventListener('drop', (e) => {
 });
 
 document.addEventListener('click', (e) => {
-  if (inputTest.open) return;
   const el = e.target.closest?.('#app .focusable');
   if (el && e.detail) {
     el.focus();
