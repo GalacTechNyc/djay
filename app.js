@@ -766,8 +766,47 @@ async function buildHome() {
   if (library.open) renderLibrary();
 }
 
+// The glasses may deliver "back" as history navigation rather than Escape,
+// so each Library screen is also a history entry. (Meta allows 5 entries;
+// the deepest Library path uses 4 including the page itself.)
+let histDepth = 0;
+let skipPops = 0;
+let lastPopAt = -Infinity;
+
+function histPush() {
+  try {
+    history.pushState({ djay: histDepth + 1 }, '');
+    histDepth++;
+  } catch {}
+}
+
+function histUnwind() {
+  if (histDepth > 0) {
+    skipPops++;
+    history.go(-histDepth);
+    histDepth = 0;
+  }
+}
+
+window.addEventListener('popstate', () => {
+  lastPopAt = performance.now();
+  if (skipPops) {
+    skipPops--;
+    return;
+  }
+  histDepth = Math.max(0, histDepth - 1);
+  if (library.open) goBack(true);
+});
+
+// Back from a key or the Back row: go through history so both paths agree.
+function userBack() {
+  if (histDepth > 0) history.back();
+  else goBack(true);
+}
+
 function openLibrary(forDeck = null) {
   disengage();
+  if (!library.open) histPush();
   library.open = true;
   library.forDeck = forDeck;
   libEl.hidden = false;
@@ -776,6 +815,7 @@ function openLibrary(forDeck = null) {
 }
 
 function closeLibrary() {
+  histUnwind();
   library.open = false;
   libEl.hidden = true;
   searchInput.blur();
@@ -786,6 +826,7 @@ function closeLibrary() {
 // Open a sub-screen. Entries are tracks, or folders (kind: 'folder') to drill into.
 function pushScreen(title, entries, prebuilt = false) {
   library.stack.push({ title: libTitle.textContent, rows: library.rows, idx: library.idx });
+  histPush();
   const rows = prebuilt ? entries : entries.map((e) => (e.kind === 'folder' ? e : { kind: 'track', item: e }));
   library.rows = [{ kind: 'back', label: '‹ Back' }, ...rows];
   library.idx = rows.length && !prebuilt ? 1 : 0;
@@ -793,9 +834,11 @@ function pushScreen(title, entries, prebuilt = false) {
   renderLibrary();
 }
 
-function goBack() {
+function goBack(fromHistory = false) {
+  if (!fromHistory) return userBack();
   const prev = library.stack.pop();
   if (!prev) return closeLibrary();
+  if (!library.stack.length) lastSearch.at = -Infinity; // allow searching the same term again
   library.rows = prev.rows;
   library.idx = prev.idx;
   libTitle.textContent = prev.title;
@@ -850,9 +893,15 @@ async function runFolder(row) {
   }
 }
 
+// Enter, 'change' and 'search' can all fire for one submission (and the
+// glasses' composer sends its own), so run each search only once.
+let lastSearch = { term: '', at: -Infinity };
 async function runSearch(term) {
   term = term.trim();
   if (!term) return;
+  if (term === lastSearch.term && performance.now() - lastSearch.at < 3000) return;
+  lastSearch = { term, at: performance.now() };
+  if (library.stack.length) return; // results already open; only search from Library home
   libTitle.textContent = `Searching “${term}”…`;
   const [au, jm, am, ia] = await Promise.allSettled([
     searchAudius(term),
@@ -944,7 +993,12 @@ function libraryKey(e) {
     case 'Backspace':
       if (inSearch && e.key === 'Backspace') return;
       e.preventDefault();
-      goBack();
+      {
+        const pressedAt = performance.now();
+        setTimeout(() => {
+          if (lastPopAt < pressedAt - 50) userBack();
+        }, 80);
+      }
   }
 }
 
