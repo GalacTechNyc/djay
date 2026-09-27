@@ -1,7 +1,16 @@
 import { DEMOS, renderDemo } from './synth.js';
 import { DeckCore } from './deck-core.js';
 import { computePeaks, detectTempo, PEAKS_PER_SEC } from './analyze.js';
-import { searchAppleMusic, appleMusicTopSongs, searchAudius, audiusTrending } from './music.js';
+import {
+  searchAppleMusic,
+  appleMusicTopSongs,
+  searchAudius,
+  audiusTrending,
+  archiveReleases,
+  jamendoEnabled,
+  jamendoPopular,
+  searchJamendo,
+} from './music.js';
 
 const $ = (s) => document.querySelector(s);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -194,7 +203,13 @@ async function loadTrack(d, item) {
         demoCache.set(item.id, buf);
       }
     } else {
-      const src = item.file ? item.file : await fetchAudio(item.url);
+      const src = item.file
+        ? item.file
+        : await fetchAudio(item.urls || [item.url], (got, total) => {
+            const mb = (got / 1e6).toFixed(1);
+            d.el.title.textContent = total ? `Loading… ${Math.round((got / total) * 100)}%` : `Loading… ${mb} MB`;
+          });
+      d.el.title.textContent = 'Analyzing…';
       const ab = src instanceof ArrayBuffer ? src : await src.arrayBuffer();
       buf = await new Promise((resolve, reject) => {
         const p = ctx.decodeAudioData(ab, resolve, (e) => reject(e || new Error('Audio format not supported')));
@@ -231,15 +246,57 @@ async function loadTrack(d, item) {
   }
 }
 
-async function fetchAudio(url) {
+// Try each URL in turn. A download only fails if it can't connect or stops
+// receiving data — slow-but-steady connections are fine.
+async function fetchAudio(urls, onProgress) {
+  let lastErr;
+  for (const url of urls) {
+    try {
+      return await fetchOne(url, onProgress);
+    } catch (err) {
+      lastErr = err;
+      console.warn('Download failed, trying next source', url, err);
+    }
+  }
+  throw lastErr || new Error('no audio source');
+}
+
+async function fetchOne(url, onProgress) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 25000);
+  let timer;
+  let why = 'connect';
+  const arm = (ms) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctl.abort(), ms);
+  };
   try {
+    arm(10000);
     const res = await fetch(url, { signal: ctl.signal });
     if (!res.ok) throw new Error(`download failed (HTTP ${res.status})`);
-    return await res.arrayBuffer();
+    const total = +res.headers.get('content-length') || 0;
+    if (!res.body?.getReader) return await res.arrayBuffer();
+    why = 'stall';
+    const reader = res.body.getReader();
+    const chunks = [];
+    let got = 0;
+    arm(15000);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      got += value.length;
+      arm(15000);
+      onProgress?.(got, total);
+    }
+    const out = new Uint8Array(got);
+    let o = 0;
+    for (const c of chunks) {
+      out.set(c, o);
+      o += c.length;
+    }
+    return out.buffer;
   } catch (err) {
-    if (err.name === 'AbortError') throw new Error('download timed out');
+    if (err.name === 'AbortError') throw new Error(why === 'connect' ? "server didn't respond" : 'download stalled');
     throw err;
   } finally {
     clearTimeout(timer);
@@ -473,7 +530,7 @@ function renderDeckText(d) {
   }
   d.el.title.textContent = d.track.title;
   const bpm = (d.bpm * d.tempo).toFixed(1);
-  const tag = d.track.preview ? ' · 0:30 preview' : '';
+  const tag = d.track.preview ? ' · 0:30 preview' : d.track.license ? ` · ${d.track.license}` : '';
   d.el.meta.dataset.base = `${d.track.artist || ''}${tag}`;
   d.el.meta.dataset.bpm = bpm;
 }
@@ -672,8 +729,7 @@ const library = {
   home: [],
   rows: [],
   idx: 0,
-  homeIdx: 0,
-  view: 'home',
+  stack: [], // screens to go back to: { title, rows, idx }
 };
 
 async function buildHome() {
@@ -683,6 +739,15 @@ async function buildHome() {
     { kind: 'folder', label: 'Audius · Trending', sub: 'Full tracks', load: () => audiusTrending() },
     { kind: 'folder', label: 'Audius · Hip-Hop', sub: 'Full tracks', load: () => audiusTrending('Hip-Hop/Rap') },
     { kind: 'folder', label: 'Audius · Electronic', sub: 'Full tracks', load: () => audiusTrending('Electronic') },
+    ...(jamendoEnabled()
+      ? [
+          { kind: 'folder', label: 'Jamendo · Popular', sub: 'Free CC music · remix-friendly', load: () => jamendoPopular() },
+          { kind: 'folder', label: 'Jamendo · Hip-Hop', sub: 'Free CC music · remix-friendly', load: () => jamendoPopular('hiphop') },
+          { kind: 'folder', label: 'Jamendo · Electronic', sub: 'Free CC music · remix-friendly', load: () => jamendoPopular('electronic') },
+        ]
+      : []),
+    { kind: 'folder', label: 'Netlabels · Hip-Hop', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'hip hop' }) },
+    { kind: 'folder', label: 'Netlabels · Electronic', sub: 'Internet Archive · free CC releases', load: () => archiveReleases({ genre: 'electronic' }) },
     {
       kind: 'setting',
       label: `Drag scratch: ${DRAG_MODE ? 'ON' : 'OFF'}`,
@@ -693,7 +758,7 @@ async function buildHome() {
     ...DEMOS.map((item) => ({ kind: 'track', item })),
   ];
   library.home = rows;
-  if (library.view === 'home') library.rows = rows;
+  if (!library.stack.length) library.rows = rows;
   try {
     const res = await fetch('tracks.json');
     if (res.ok) for (const item of await res.json()) rows.push({ kind: 'track', item: { id: item.url, ...item } });
@@ -706,7 +771,7 @@ function openLibrary(forDeck = null) {
   library.open = true;
   library.forDeck = forDeck;
   libEl.hidden = false;
-  if (library.view === 'home') library.rows = library.home;
+  if (!library.stack.length) library.rows = library.home;
   renderLibrary();
 }
 
@@ -718,12 +783,22 @@ function closeLibrary() {
   $(`[data-action="play"][data-deck="${target}"]`).focus();
 }
 
-function showRows(title, rows) {
-  library.view = 'list';
-  library.homeIdx = library.idx;
-  library.rows = [{ kind: 'back', label: '‹ Back' }, ...rows.map((item) => ({ kind: 'track', item }))];
-  library.idx = rows.length ? 1 : 0;
+// Open a sub-screen. Entries are tracks, or folders (kind: 'folder') to drill into.
+function pushScreen(title, entries, prebuilt = false) {
+  library.stack.push({ title: libTitle.textContent, rows: library.rows, idx: library.idx });
+  const rows = prebuilt ? entries : entries.map((e) => (e.kind === 'folder' ? e : { kind: 'track', item: e }));
+  library.rows = [{ kind: 'back', label: '‹ Back' }, ...rows];
+  library.idx = rows.length && !prebuilt ? 1 : 0;
   libTitle.textContent = title;
+  renderLibrary();
+}
+
+function goBack() {
+  const prev = library.stack.pop();
+  if (!prev) return closeLibrary();
+  library.rows = prev.rows;
+  library.idx = prev.idx;
+  libTitle.textContent = prev.title;
   renderLibrary();
 }
 
@@ -749,6 +824,7 @@ async function showDeviceCheck() {
   for (const [label, url] of [
     ['Apple Music reachable', 'https://itunes.apple.com/search?term=test&limit=1&media=music'],
     ['Audius reachable', 'https://api.audius.co/v1/tracks/trending?limit=1&app_name=djay-glasses'],
+    ['Internet Archive reachable', 'https://archive.org/metadata/netlabels/metadata/title'],
   ]) {
     try {
       const res = await fetch(url);
@@ -758,29 +834,19 @@ async function showDeviceCheck() {
     }
   }
   rows.push({ label: 'Last error', value: state.lastError || 'None', ok: !state.lastError });
-  library.view = 'list';
-  library.homeIdx = library.idx;
-  library.rows = [{ kind: 'back', label: '‹ Back' }, ...rows.map((r) => ({ kind: 'info', ...r }))];
-  library.idx = 0;
-  libTitle.textContent = 'Device check';
-  renderLibrary();
-}
-
-function goHome() {
-  library.view = 'home';
-  library.rows = library.home;
-  library.idx = library.homeIdx;
-  libTitle.textContent = 'Library';
-  renderLibrary();
+  pushScreen('Device check', rows.map((r) => ({ kind: 'info', ...r })), true);
 }
 
 async function runFolder(row) {
+  const title = libTitle.textContent;
   libTitle.textContent = 'Loading…';
   try {
-    showRows(row.label, await row.load());
+    const entries = await row.load();
+    libTitle.textContent = title;
+    pushScreen(entries.length ? row.label : `${row.label} — nothing found`, entries);
   } catch (err) {
-    libTitle.textContent = 'Library';
-    toast(`Couldn't reach ${row.label.split(' ·')[0]}`);
+    libTitle.textContent = title;
+    reportError(`Couldn't open ${row.label}`, err);
   }
 }
 
@@ -788,9 +854,15 @@ async function runSearch(term) {
   term = term.trim();
   if (!term) return;
   libTitle.textContent = `Searching “${term}”…`;
-  const [au, am] = await Promise.allSettled([searchAudius(term), searchAppleMusic(term)]);
-  const rows = [...(au.value || []), ...(am.value || [])];
-  showRows(rows.length ? `“${term}”` : `No results for “${term}”`, rows);
+  const [au, jm, am, ia] = await Promise.allSettled([
+    searchAudius(term),
+    jamendoEnabled() ? searchJamendo(term) : [],
+    searchAppleMusic(term),
+    archiveReleases({ term }),
+  ]);
+  const rows = [au, jm, am, ia].flatMap((r) => r.value || []);
+  libTitle.textContent = 'Library';
+  pushScreen(rows.length ? `“${term}”` : `No results for “${term}”`, rows);
 }
 
 function rowHTML(row, i) {
@@ -804,11 +876,11 @@ function rowHTML(row, i) {
   if (row.kind === 'info')
     return `<li class="row info${sel}"><span class="txt"><b>${esc(row.label)}</b><small class="${row.ok === false ? 'bad' : row.ok ? 'good' : ''}">${esc(row.value)}</small></span></li>`;
   if (row.kind === 'folder')
-    return `<li class="row folder${sel}"><span class="ico">♫</span><span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="chev">›</span></li>`;
+    return `<li class="row folder${sel}">${row.art ? `<img src="${esc(row.art)}" alt="">` : '<span class="ico">♫</span>'}<span class="txt"><b>${esc(row.label)}</b><small>${esc(row.sub)}</small></span><span class="chev">›</span></li>`;
   const t = row.item;
-  const badge = t.style ? 'DEMO' : t.preview ? '0:30' : t.source === 'Audius' ? 'FULL' : 'FILE';
+  const badge = t.style ? 'DEMO' : t.preview ? '0:30' : t.file || !t.source ? 'FILE' : 'FULL';
   const art = t.art ? `<img src="${esc(t.art)}" alt="">` : `<span class="ico">●</span>`;
-  const bpm = t.bpm ? ` · ${Math.round(t.bpm)} BPM` : '';
+  const bpm = t.bpm ? ` · ${Math.round(t.bpm)} BPM` : t.license ? ` · ${t.license}` : '';
   return `<li class="row${sel}">${art}<span class="txt"><b>${esc(t.title)}</b><small>${esc(t.artist || '')}${bpm}</small></span><span class="badge">${badge}</span></li>`;
 }
 
@@ -858,7 +930,7 @@ function libraryKey(e) {
         return; // let the glasses open the text composer
       }
       e.preventDefault();
-      if (row?.kind === 'back') return goHome();
+      if (row?.kind === 'back') return goBack();
       if (row?.kind === 'folder') return runFolder(row);
       if (row?.kind === 'setting') return row.run();
       if (row?.kind === 'track') {
@@ -872,8 +944,7 @@ function libraryKey(e) {
     case 'Backspace':
       if (inSearch && e.key === 'Backspace') return;
       e.preventDefault();
-      if (library.view !== 'home') goHome();
-      else closeLibrary();
+      goBack();
   }
 }
 

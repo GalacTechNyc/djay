@@ -37,8 +37,17 @@ To practice a baby scratch: grab the platter, then swipe right, left, right, lef
 |---|---|---|
 | **Audius** | Full tracks, search + trending | Open music platform with a free public API that lets apps get at the raw audio |
 | **Apple Music** | 30-second previews of almost any song, search + Top 50 | Full Apple Music songs are DRM-locked. DJ apps like djay get full songs through a private Apple partnership |
+| **Internet Archive Netlabels** | Full tracks, free Creative Commons releases (hip-hop, electronic, search) | Open API, no key. Filtered to licenses that allow remixing |
+| **Jamendo** | Full tracks, free Creative Commons music | Needs a free client ID in `config.js` (see below). Filtered to licenses that allow remixing |
 | **Your files** | Full tracks | Put MP3/M4A files in `tracks/` and list them in `tracks.json` (see below) |
 | **Spotify** | ✗ | No raw audio access, and Spotify's developer terms ban DJ/mixing apps |
+| **SoundCloud** | ✗ | API keys are by application only, and the API terms ban modifying tracks or building an on-demand library from many uploaders. DJ apps get it through a partnership |
+
+Creative Commons tracks show their license (for example "CC BY-SA") next to the artist name, as their licenses require.
+
+**Enabling Jamendo:** create a free account at [devportal.jamendo.com](https://devportal.jamendo.com), create an app, and paste its Client ID into `config.js`. Push, and the Jamendo rows appear in the Library.
+
+Audius tracks are fetched from whichever of Audius's mirror servers responds. Downloads only give up if they can't connect or stop receiving data, so slow connections still work.
 
 `tracks.json` example:
 
@@ -75,6 +84,7 @@ If tracks won't load or play, open **Library → Device check**. It shows which 
 | `deck-core.js` | Turntable audio engine: variable-speed, reversible playback, motor inertia, scratch strokes, spinback |
 | `deck-worklet.js` | Runs the engine on the audio thread (AudioWorklet); `app.js` falls back to ScriptProcessor |
 | `app.js` | Decks, mixer, sync, automix, D-pad focus, library, gestures |
-| `music.js` | Apple Music + Audius catalogs |
+| `music.js` | Apple Music, Audius, Internet Archive and Jamendo catalogs |
+| `config.js` | Optional API keys (Jamendo) |
 | `analyze.js` | Waveform peaks, BPM + beat-grid detection |
 | `synth.js` | Synthesized demo tracks (so it works with zero audio files) |
