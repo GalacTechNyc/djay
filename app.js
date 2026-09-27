@@ -1054,16 +1054,19 @@ document.addEventListener('keydown', (e) => {
   if (e.isTrusted) {
     const now = performance.now();
     lastRealKeyAt = now;
-    // Drop a real key that duplicates a gesture we already turned into a key,
-    // or arrows that echo a drag-scratch.
-    if (now - lastSynthAt < 300 || (drag && e.key.startsWith('Arrow')) || now - lastDragEndAt < 200) {
+    realKeysSeen = true;
+    // Drop only exact repeats of a key we just generated from a gesture, and
+    // arrows that echo arm movement while scratching.
+    const arrow = e.key.startsWith('Arrow');
+    if ((e.key === lastSynthKey && now - lastSynthAt < 400) || (arrow && (drag || now - lastDragEndAt < 200))) {
       e.preventDefault();
       return;
     }
   }
   if (motion.open) {
     e.preventDefault();
-    if (['Escape', 'Backspace', 'Enter'].includes(e.key)) backLater(exitMotion);
+    const exits = DRAG_MODE ? ['Escape', 'Backspace'] : ['Escape', 'Backspace', 'Enter'];
+    if (exits.includes(e.key)) backLater(exitMotion);
     return;
   }
   if (library.open) return libraryKey(e);
@@ -1074,6 +1077,9 @@ document.addEventListener('keydown', (e) => {
     const d = decks[+el.dataset.deck];
     if (el.dataset.kind === 'platter') {
       e.preventDefault();
+      // In hand mode a pinch is the hand touching the record, so its Enter
+      // is ignored; back disarms.
+      if (DRAG_MODE && k === 'Enter') return;
       if (k === 'ArrowRight') stroke(d, 1);
       else if (k === 'ArrowLeft') stroke(d, -1);
       else if (k === 'ArrowUp') {
@@ -1114,7 +1120,11 @@ document.addEventListener('keydown', (e) => {
 let drag = null;
 let gesture = null;
 let lastRealKeyAt = -Infinity;
+// Once the glasses deliver real swipe/pinch keys, gestures are never turned
+// into keys too (a pinch would otherwise count twice).
+let realKeysSeen = false;
 let lastSynthAt = -Infinity;
+let lastSynthKey = '';
 let lastDragEndAt = -Infinity;
 
 function startScratch(e, d) {
@@ -1181,10 +1191,12 @@ function endPointer(e) {
           : dy > 0 ? 'ArrowDown' : 'ArrowUp';
     // If the glasses also sent a real key for this gesture, let that win.
     setTimeout(() => {
-      if (lastRealKeyAt > g.at) return;
+      // A real key for this gesture may arrive just before or after it.
+      if (realKeysSeen || lastRealKeyAt > g.at - 400) return;
       lastSynthAt = performance.now();
+      lastSynthKey = key;
       document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
-    }, 120);
+    }, 250);
   }
   if (gesture && e.pointerId === gesture.id) gesture = null;
 }
